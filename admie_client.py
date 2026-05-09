@@ -26,8 +26,11 @@ import time
 BASE_URL = "https://www.admie.gr"
 
 # Endpoints — τα 3 "σημεία επαφής" με το API
-ENDPOINT_FILETYPES  = f"{BASE_URL}/getFiletypeInfoEN"       # βήμα 1
-ENDPOINT_FILE_LIST  = f"{BASE_URL}/getOperationMarketFile"  # βήμα 2
+ENDPOINT_FILETYPES  = f"{BASE_URL}/getFiletypeInfoEN"           # βήμα 1
+ENDPOINT_FILE_LIST  = f"{BASE_URL}/getOperationMarketFilewRange" # βήμα 2
+# Χρησιμοποιούμε το FilewRange (με 'w') αντί για το getOperationMarketFile.
+# Διαφορά: το FilewRange βρίσκει αρχεία που επικαλύπτονται ΜΕΡΙΚΩΣ ή ΟΛΙΚΩΣ
+# με το ζητούμενο εύρος — χωρίς chunking, με 1 μόνο request για οποιοδήποτε εύρος.
 # βήμα 3: το URL του αρχείου επιστρέφεται από το βήμα 2 (πεδίο "file_path")
 
 # Καθυστέρηση μεταξύ requests (ευγενική χρήση του API)
@@ -104,18 +107,21 @@ def get_filetypes_grouped() -> dict:
 
 
 # ============================================================
-# ============================================================
 # ΒΗΜΑ 2: get_file_list()
 # ============================================================
 
-# Το ΑΔΜΗΕ API επιστρέφει [] αν το εύρος ημερομηνιών υπερβαίνει 7 ημέρες.
-# Σπάμε λοιπόν κάθε μεγάλο εύρος σε εβδομαδιαία chunks αυτόματα.
-ADMIE_MAX_DAYS = 7
-
-
-def _get_file_list_single(filetype: str, date_from: str, date_to: str) -> list:
+def get_file_list(filetype: str, date_from: str, date_to: str) -> list:
     """
-    Εσωτερική συνάρτηση — κάνει ένα μόνο request για εύρος <= 7 ημερών.
+    Καλεί το getOperationMarketFilewRange και επιστρέφει λίστα αρχείων.
+
+    Το FilewRange (με 'w') βρίσκει αρχεία που επικαλύπτονται μερικώς ή
+    ολικώς με το ζητούμενο εύρος ημερομηνιών. Αντίθετα με το παλιό
+    getOperationMarketFile που απαιτούσε ακριβή ταύτιση και chunking
+    (1 request ανά εβδομάδα), εδώ κάνουμε 1 μόνο request για οποιοδήποτε
+    εύρος — γρηγορότερο και πιο αξιόπιστο.
+
+    Παράδειγμα: 1/1/2024 -> 31/12/2024 (365 μέρες)
+    → 1 request → λίστα με όλα τα αρχεία
     """
     params = {
         "dateStart"    : date_from,
@@ -129,48 +135,8 @@ def _get_file_list_single(filetype: str, date_from: str, date_to: str) -> list:
         files = response.json()
         return files if isinstance(files, list) else []
     except Exception as e:
-        print(f"[admie_client] _get_file_list_single error ({filetype} {date_from}->{date_to}): {e}")
+        print(f"[admie_client] get_file_list error ({filetype} {date_from}->{date_to}): {e}")
         return []
-
-
-def get_file_list(filetype: str, date_from: str, date_to: str) -> list:
-    """
-    Καλεί το getOperationMarketFile και επιστρέφει λίστα αρχείων.
-
-    Το ΑΔΜΗΕ API δεχεται μεγιστο 7 ημερες ανα request.
-    Αν το ευρος ειναι μεγαλυτερο, το σπαμε αυτοματα σε εβδομαδιαια
-    chunks και συνενωνουμε τα αποτελεσματα (chunking).
-
-    Παραδειγμα: 1/1/2024 -> 31/12/2024 (365 μερες)
-    -> 53 requests x 7 ημερες -> συνενωνονται σε μια λιστα
-    """
-    from datetime import datetime as dt, timedelta
-
-    d_from = dt.strptime(date_from, "%Y-%m-%d")
-    d_to   = dt.strptime(date_to,   "%Y-%m-%d")
-
-    all_files = []
-    seen_urls = set()   # αποφυγη διπλοτυπων
-
-    chunk_start = d_from
-    while chunk_start < d_to:
-        chunk_end = min(chunk_start + timedelta(days=ADMIE_MAX_DAYS - 1), d_to)
-
-        files = _get_file_list_single(
-            filetype  = filetype,
-            date_from = chunk_start.strftime("%Y-%m-%d"),
-            date_to   = chunk_end.strftime("%Y-%m-%d"),
-        )
-
-        for f in files:
-            url = f.get("file_path", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                all_files.append(f)
-
-        chunk_start = chunk_end + timedelta(days=1)
-
-    return all_files
 
 
 
