@@ -4,19 +4,30 @@ admie_client.py
 Επικοινωνία με το ΑΔΜΗΕ File API (www.admie.gr).
 Χωρίς token — το API είναι ανοιχτό.
 
-Η λογική είναι τριβήματος (3 βήματα):
-  1. get_filetypes()        : "Τι filetypes υπάρχουν;" → λεξικό με 74 filetypes
+Η λογική είναι τριών βημάτων:
+  1. get_filetypes()        : "Τι filetypes υπάρχουν;" → 74 filetypes
   2. get_file_list()        : "Τι αρχεία υπάρχουν για αυτό το filetype + ημερομηνίες;"
   3. download_file()        : "Κατέβασε ένα αρχείο" → DataFrame
 
-  + get_data()             : κύρια συνάρτηση — τα συνδυάζει όλα
+  + get_data()             : κύρια συνάρτηση — τα συνδυάζει όλα (παράλληλο κατέβασμα)
   + check_availability()   : γρήγορος έλεγχος αν υπάρχουν δεδομένα
+  + deduplicate_by_timestamp() : αφαίρεση διπλών εγγραφών ανά STARTDATE
+
+Αλλαγές v2:
+  - Endpoint: getOperationMarketFilewRange (με 'w') αντί για getOperationMarketFile
+    → 1 request για οποιοδήποτε εύρος, χωρίς chunking
+  - download_file(): ρητά engine openpyxl/xlrd, dayfirst=True για σωστό parsing
+  - deduplicate_by_timestamp(): νέα συνάρτηση για αφαίρεση διπλών ανά STARTDATE
+  - get_data(): παράλληλο κατέβασμα με ThreadPoolExecutor (5x ταχύτερο)
+  - Metadata: χρήση file_path για file_name (το file_name ήταν κενό στο API)
 """
 
 import requests
 import pandas as pd
 import io
 import time
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 # ============================================================
@@ -25,19 +36,18 @@ import time
 
 BASE_URL = "https://www.admie.gr"
 
-# Endpoints — τα 3 "σημεία επαφής" με το API
-ENDPOINT_FILETYPES  = f"{BASE_URL}/getFiletypeInfoEN"           # βήμα 1
-ENDPOINT_FILE_LIST  = f"{BASE_URL}/getOperationMarketFilewRange" # βήμα 2
-# Χρησιμοποιούμε το FilewRange (με 'w') αντί για το getOperationMarketFile.
-# Διαφορά: το FilewRange βρίσκει αρχεία που επικαλύπτονται ΜΕΡΙΚΩΣ ή ΟΛΙΚΩΣ
-# με το ζητούμενο εύρος — χωρίς chunking, με 1 μόνο request για οποιοδήποτε εύρος.
-# βήμα 3: το URL του αρχείου επιστρέφεται από το βήμα 2 (πεδίο "file_path")
+# Endpoints
+ENDPOINT_FILETYPES = f"{BASE_URL}/getFiletypeInfoEN"
+# FilewRange (με 'w'): βρίσκει αρχεία που επικαλύπτονται μερικώς ή ολικώς
+# με το ζητούμενο εύρος — 1 request για οποιοδήποτε εύρος, χωρίς chunking
+ENDPOINT_FILE_LIST = f"{BASE_URL}/getOperationMarketFilewRange"
+
+# Παράλληλα downloads
+MAX_WORKERS = 5
 
 # Καθυστέρηση μεταξύ requests (ευγενική χρήση του API)
 REQUEST_DELAY_SEC = 0.3
 
-# Το admie.gr μπλοκάρει requests χωρίς browser-like headers (επιστρέφει 403).
-# Προσθέτουμε User-Agent και Referer για να μοιάζουμε με κανονικό browser.
 HEADERS = {
     "User-Agent" : (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -63,25 +73,16 @@ def get_filetypes() -> pd.DataFrame:
       - process        : η κατηγορία (π.χ. "Balancing Market Settlement")
       - data_type      : σύντομη περιγραφή
       - period_covered : χρονική κάλυψη ("DAY", "WEEK", "MONTH", "YEAR")
-
-    Αυτό καλείται μία φορά κατά την εκκίνηση της εφαρμογής.
     """
     try:
         response = requests.get(ENDPOINT_FILETYPES, headers=HEADERS, timeout=15)
-        response.raise_for_status()   # πετάει exception αν status != 200
-
-        data = response.json()        # JSON → Python list of dicts (αυτόματα!)
-
-        df = pd.DataFrame(data)
-
-        # Κρατάμε μόνο τις στήλες που μας χρειάζονται
+        response.raise_for_status()
+        data = response.json()
+        df   = pd.DataFrame(data)
         cols = ["filetype", "process", "data_type", "period_covered"]
-        df = df[[c for c in cols if c in df.columns]]
-
+        df   = df[[c for c in cols if c in df.columns]]
         return df
-
     except Exception as e:
-        # Αν αποτύχει, επιστρέφουμε κενό DataFrame — best-effort λογική
         print(f"[admie_client] get_filetypes error: {e}")
         return pd.DataFrame(columns=["filetype", "process", "data_type", "period_covered"])
 
@@ -89,20 +90,16 @@ def get_filetypes() -> pd.DataFrame:
 def get_filetypes_grouped() -> dict:
     """
     Επιστρέφει τα filetypes ομαδοποιημένα ανά process (για το UI).
-    
+
     Επιστρέφει λεξικό:
-      { "Balancing Market Settlement": ["BalancingEnergyProduct", ...],
-        "Day Ahead Market": [...],
-        ... }
+      { "Balancing Market Settlement": ["BalancingEnergyProduct", ...], ... }
     """
     df = get_filetypes()
     if df.empty:
         return {}
-
     grouped = {}
     for process, group_df in df.groupby("process"):
         grouped[process] = group_df["filetype"].tolist()
-
     return grouped
 
 
@@ -115,13 +112,11 @@ def get_file_list(filetype: str, date_from: str, date_to: str) -> list:
     Καλεί το getOperationMarketFilewRange και επιστρέφει λίστα αρχείων.
 
     Το FilewRange (με 'w') βρίσκει αρχεία που επικαλύπτονται μερικώς ή
-    ολικώς με το ζητούμενο εύρος ημερομηνιών. Αντίθετα με το παλιό
-    getOperationMarketFile που απαιτούσε ακριβή ταύτιση και chunking
-    (1 request ανά εβδομάδα), εδώ κάνουμε 1 μόνο request για οποιοδήποτε
-    εύρος — γρηγορότερο και πιο αξιόπιστο.
+    ολικώς με το ζητούμενο εύρος. Αντίθετα με το παλιό getOperationMarketFile
+    που απαιτούσε ακριβή ταύτιση και chunking (1 request ανά εβδομάδα),
+    εδώ κάνουμε 1 μόνο request για οποιοδήποτε εύρος.
 
-    Παράδειγμα: 1/1/2024 -> 31/12/2024 (365 μέρες)
-    → 1 request → λίστα με όλα τα αρχεία
+    Παράδειγμα: 1/1/2024 → 31/12/2024 → 1 request → όλα τα αρχεία
     """
     params = {
         "dateStart"    : date_from,
@@ -139,46 +134,126 @@ def get_file_list(filetype: str, date_from: str, date_to: str) -> list:
         return []
 
 
-
 # ============================================================
 # ΒΗΜΑ 3: download_file()
 # ============================================================
 
-def download_file(file_url: str, file_name: str) -> pd.DataFrame:
+def download_file(file_info: dict) -> pd.DataFrame:
     """
     Κατεβάζει ένα αρχείο από το URL που έδωσε το βήμα 2.
-    Αναγνωρίζει αυτόματα αν είναι Excel ή CSV και επιστρέφει DataFrame.
+    Καλείται παράλληλα από το ThreadPoolExecutor στο get_data().
 
-    Παράμετροι:
-      file_url  : το πλήρες URL του αρχείου (πεδίο "file_path" από βήμα 2)
-      file_name : το όνομα αρχείου (για να ξέρουμε αν είναι .xlsx ή .csv)
+    Αναγνωρίζει αυτόματα αν είναι .xlsx (openpyxl) ή .xls (xlrd).
+    Χρησιμοποιεί dayfirst=True για σωστό parsing ημερομηνιών DD/MM/YYYY.
+
+    Παράμετρος:
+      file_info : dict από το βήμα 2 (περιέχει file_path, file_fromdate κτλ.)
     """
+    file_url  = file_info.get("file_path", "")
+    # Το API επιστρέφει κενό file_name — παίρνουμε το όνομα από το URL
+    file_name = file_url.split("/")[-1] if file_url else "unknown"
+
+    if not file_url:
+        return pd.DataFrame()
+
     try:
         time.sleep(REQUEST_DELAY_SEC)
         response = requests.get(file_url, headers=HEADERS, timeout=30)
         response.raise_for_status()
 
-        content = io.BytesIO(response.content)   # περιεχόμενο σε μνήμη (δεν αποθηκεύεται στο δίσκο)
+        content    = io.BytesIO(response.content)
         name_lower = file_name.lower()
 
-        # Αναγνώριση μορφής βάσει ονόματος αρχείου
-        if name_lower.endswith(".xlsx") or name_lower.endswith(".xls"):
-            df = pd.read_excel(content)
+        # Ρητή επιλογή engine ανά τύπο αρχείου
+        if name_lower.endswith(".xlsx"):
+            df = pd.read_excel(content, engine="openpyxl")
+        elif name_lower.endswith(".xls"):
+            df = pd.read_excel(content, engine="xlrd")
         elif name_lower.endswith(".csv"):
             df = pd.read_csv(content, sep=None, engine="python")
         else:
-            # Αν δεν ξέρουμε τη μορφή, δοκιμάζουμε Excel πρώτα, μετά CSV
             try:
-                df = pd.read_excel(content)
+                df = pd.read_excel(content, engine="openpyxl")
             except Exception:
-                content.seek(0)   # επιστρέφουμε στην αρχή του buffer
-                df = pd.read_csv(content, sep=None, engine="python")
+                content.seek(0)
+                try:
+                    df = pd.read_excel(content, engine="xlrd")
+                except Exception:
+                    content.seek(0)
+                    df = pd.read_csv(content, sep=None, engine="python")
+
+        if df.empty:
+            return pd.DataFrame()
+
+        # Μετατροπή STARTDATE/ENDDATE σε datetime
+        # dayfirst=True: η μορφή είναι DD/MM/YYYY (ευρωπαϊκή σύμβαση ΑΔΜΗΕ)
+        # Χωρίς αυτό το pandas μαντεύει λάθος: "01/11/2020" → 11 Ιανουαρίου
+        for col in ("STARTDATE", "ENDDATE"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+
+        # Προσθέτουμε μεταδεδομένα πηγής
+        df.insert(0, "file_name",   file_name)
+        df.insert(1, "period_from", file_info.get("file_fromdate", ""))
+        df.insert(2, "period_to",   file_info.get("file_todate", ""))
+        df.insert(3, "published",   file_info.get("file_published", ""))
 
         return df
 
     except Exception as e:
         print(f"[admie_client] download_file error ({file_name}): {e}")
         return pd.DataFrame()
+
+
+# ============================================================
+# ΑΦΑΙΡΕΣΗ ΔΙΠΛΩΝ: deduplicate_by_timestamp()
+# ============================================================
+
+def deduplicate_by_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Αφαιρεί διπλές (ή τριπλές κτλ.) εγγραφές ανά STARTDATE.
+
+    Γιατί χρειάζεται:
+      Το API επιστρέφει ΟΛΕΣ τις εκδόσεις ενός αρχείου —
+      αρχικές, αναθεωρήσεις (Recalc_), νέες μορφές κτλ.
+      Αυτές έχουν επικαλυπτόμενες περιόδους στα metadata,
+      οπότε δεν αρκεί φιλτράρισμα ανά period_from/to.
+      Εδώ κρατάμε για κάθε STARTDATE μόνο την εγγραφή
+      από το αρχείο με το πιο πρόσφατο 'published'.
+
+    Παράδειγμα:
+      20201026_IMBABE_01.xlsx  (published: 30/01/2023) → περιέχει 01/11/2020
+      Recalc_..._20201101.xlsx (published: 31/12/2020) → περιέχει 01/11/2020
+      → Κρατάμε από το 20201026_IMBABE (νεότερο published)
+
+    Αν δεν υπάρχει στήλη STARTDATE (κάποια filetypes), επιστρέφει αναλλοίωτο.
+    """
+    if df.empty or "STARTDATE" not in df.columns:
+        return df
+
+    df = df.copy()
+
+    # Μετατρέπουμε published σε datetime για σωστή σύγκριση
+    df["_pub_dt"] = pd.to_datetime(
+        df["published"], format="%d.%m.%Y %H:%M", errors="coerce"
+    )
+
+    # Βεβαιωνόμαστε ότι STARTDATE είναι datetime
+    df["STARTDATE"] = pd.to_datetime(df["STARTDATE"], dayfirst=True, errors="coerce")
+
+    # Ταξινόμηση: παλαιότερο published πρώτα
+    df = df.sort_values(["STARTDATE", "_pub_dt"])
+
+    # Για κάθε STARTDATE κρατάμε μόνο την τελευταία εγγραφή (νεότερο published)
+    # keep="last" λειτουργεί για διπλές, τριπλές, οποιοδήποτε πλήθος
+    df = df.drop_duplicates(subset=["STARTDATE"], keep="last")
+
+    # Καθαρισμός και τελική ταξινόμηση
+    df = df.drop(columns=["_pub_dt"])
+    df = df.sort_values("STARTDATE")
+    df = df.reset_index(drop=True)
+
+    return df
 
 
 # ============================================================
@@ -191,11 +266,12 @@ def get_data(filetype_keys: list, date_from: str, date_to: str) -> dict:
 
     Για κάθε filetype:
       1. Ζητά τη λίστα αρχείων (βήμα 2)
-      2. Κατεβάζει κάθε αρχείο (βήμα 3)
-      3. Συνδυάζει όλα τα DataFrames του ίδιου filetype
+      2. Κατεβάζει παράλληλα κάθε αρχείο (βήμα 3)
+      3. Συνδυάζει όλα τα DataFrames
+      4. Αφαιρεί διπλές εγγραφές ανά STARTDATE
 
     Παράμετροι:
-      filetype_keys : λίστα από filetype strings (π.χ. ["BalancingEnergyProduct", "IMBABE"])
+      filetype_keys : λίστα από filetype strings
       date_from     : "YYYY-MM-DD"
       date_to       : "YYYY-MM-DD"
 
@@ -206,41 +282,31 @@ def get_data(filetype_keys: list, date_from: str, date_to: str) -> dict:
 
     for filetype in filetype_keys:
 
-        # Βήμα 2: Λίστα αρχείων για αυτό το filetype και αυτές τις ημερομηνίες
+        # Βήμα 2: Λίστα αρχείων
         files = get_file_list(filetype, date_from, date_to)
 
         if not files:
-            # Δεν βρέθηκαν αρχεία — best-effort: συνεχίζουμε
             results[filetype] = pd.DataFrame()
             continue
 
-        dfs = []   # μία λίστα DataFrames, ένα ανά αρχείο
+        # Βήμα 3: Παράλληλο κατέβασμα
+        dfs = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = {executor.submit(download_file, f): f for f in files}
+            for future in as_completed(futures):
+                df = future.result()
+                if not df.empty:
+                    dfs.append(df)
 
-        for file_info in files:
-            file_url  = file_info.get("file_path", "")
-            file_name = file_info.get("file_name", "unknown")
-
-            if not file_url:
-                continue
-
-            # Βήμα 3: Κατέβασμα και ανάγνωση αρχείου
-            df = download_file(file_url, file_name)
-
-            if df.empty:
-                continue
-
-            # Προσθέτουμε πληροφορίες πηγής στο DataFrame
-            df["source_file"]  = file_name
-            df["date_start"]   = file_info.get("date_start", "")
-            df["date_end"]     = file_info.get("date_end", "")
-
-            dfs.append(df)
-
-        # Συνδυάζουμε όλα τα αρχεία του ίδιου filetype σε ένα DataFrame
-        if dfs:
-            results[filetype] = pd.concat(dfs, ignore_index=True)
-        else:
+        if not dfs:
             results[filetype] = pd.DataFrame()
+            continue
+
+        # Βήμα 4: Συνένωση και αφαίρεση διπλών
+        combined = pd.concat(dfs, ignore_index=True)
+        combined = deduplicate_by_timestamp(combined)
+
+        results[filetype] = combined
 
     return results
 
@@ -251,12 +317,12 @@ def get_data(filetype_keys: list, date_from: str, date_to: str) -> dict:
 
 def check_availability(filetype_keys: list, date_from: str, date_to: str) -> dict:
     """
-    Ελέγχει αν υπάρχουν αρχεία για κάθε filetype στο δοθέν εύρος ημερομηνιών.
+    Ελέγχει αν υπάρχουν αρχεία για κάθε filetype στο δοθέν εύρος.
     ΔΕΝ κατεβάζει τα αρχεία — μόνο ελέγχει αν υπάρχουν (βήμα 2 μόνο).
 
     Επιστρέφει:
-      { "BalancingEnergyProduct": "ok" | "unavailable",
-        "IMBABE": "ok" | "unavailable", ... }
+      { "BalancingEnergyProduct": {"status": "ok", "count": 55},
+        "IMBABE": {"status": "unavailable", "count": 0}, ... }
     """
     availability = {}
 
@@ -264,7 +330,6 @@ def check_availability(filetype_keys: list, date_from: str, date_to: str) -> dic
         files = get_file_list(filetype, date_from, date_to)
 
         if files:
-            # Μετράμε πόσα αρχεία βρέθηκαν (χρήσιμο για το UI)
             availability[filetype] = {
                 "status" : "ok",
                 "count"  : len(files),
