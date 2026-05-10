@@ -405,6 +405,22 @@ with tab_admie:
     # ── 4.4 ΑΝΑΚΤΗΣΗ & ΠΡΟΕΠΙΣΚΟΠΗΣΗ ────────────────────────
     st.subheader("📋 Δεδομένα")
 
+    # ⚠️ Έλεγχος συμβατότητας session_state:
+    # Αν ο χρήστης άλλαξε filetypes ή ημερομηνίες μετά την τελευταία ανάκτηση,
+    # τα αποθηκευμένα αποτελέσματα δεν αντιστοιχούν πλέον στην τρέχουσα επιλογή.
+    # Καθαρίζουμε αυτόματα για να αποφύγουμε crash στην export.
+    if "admie_results" in st.session_state:
+        saved_fts   = set(st.session_state.get("admie_filetypes", []))
+        saved_dates = st.session_state.get("admie_saved_dates", ("", ""))
+        current_dates = (admie_from_str, admie_to_str)
+
+        if set(selected_filetypes) != saved_fts or current_dates != saved_dates:
+            # Η επιλογή άλλαξε — τα αποθηκευμένα δεδομένα δεν ισχύουν πια
+            del st.session_state["admie_results"]
+            del st.session_state["admie_filetypes"]
+            st.session_state.pop("admie_saved_dates", None)
+            st.info("ℹ️ Η επιλογή σου άλλαξε. Κάνε νέα ανάκτηση δεδομένων.")
+
     if st.button("▶ Ανάκτηση δεδομένων", key="admie_fetch",
                  type="primary", use_container_width=True):
 
@@ -418,8 +434,10 @@ with tab_admie:
                     date_to       = admie_to_str,
                 )
 
-            st.session_state["admie_results"]   = admie_results
-            st.session_state["admie_filetypes"] = selected_filetypes
+            # Αποθηκεύουμε και την τρέχουσα επιλογή για μελλοντικό validation
+            st.session_state["admie_results"]     = admie_results
+            st.session_state["admie_filetypes"]   = selected_filetypes
+            st.session_state["admie_saved_dates"] = (admie_from_str, admie_to_str)
 
     # Προεπισκόπηση
     if "admie_results" in st.session_state:
@@ -436,7 +454,11 @@ with tab_admie:
                 with preview_tabs[i]:
                     df = admie_results[ft]
                     st.caption(f"{len(df)} εγγραφές")
-                    st.dataframe(pd.concat([df.head(5), df.tail(5)]), use_container_width=True)
+                    # Ασφαλής προεπισκόπηση: αν λιγότερες από 10 εγγραφές, δείχνουμε όλες
+                    if len(df) <= 10:
+                        st.dataframe(df, use_container_width=True)
+                    else:
+                        st.dataframe(pd.concat([df.head(5), df.tail(5)]), use_container_width=True)
 
             with preview_tabs[-1]:
                 st.markdown(f"**Πηγή:** ΑΔΜΗΕ File API")
@@ -449,17 +471,21 @@ with tab_admie:
         st.divider()
 
         # ── 4.5 ΛΗΨΗ EXCEL ── εμφανίζεται μόνο αν υπάρχουν δεδομένα
-        xlsx_bytes = export_admie(
-            results       = admie_results,
-            filetype_keys = ft_keys,
-            dt_from       = admie_from_str,
-            dt_to         = admie_to_str,
-        )
+        try:
+            xlsx_bytes = export_admie(
+                results       = admie_results,
+                filetype_keys = ft_keys,
+                dt_from       = admie_from_str,
+                dt_to         = admie_to_str,
+            )
 
-        st.download_button(
-            label     = "⬇️ Λήψη Excel",
-            data      = xlsx_bytes,
-            file_name = f"ADMIE_{admie_date_from}_{admie_date_to}.xlsx",
-            mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width = True,
-        )
+            st.download_button(
+                label     = "⬇️ Λήψη Excel",
+                data      = xlsx_bytes,
+                file_name = f"ADMIE_{admie_date_from}_{admie_date_to}.xlsx",
+                mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width = True,
+            )
+        except Exception as e:
+            st.error(f"⚠️ Σφάλμα κατά τη δημιουργία του Excel: {e}")
+            st.info("Δοκίμασε να κάνεις νέα ανάκτηση δεδομένων.")
