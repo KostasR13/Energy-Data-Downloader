@@ -100,20 +100,20 @@ _LOADING_HTML = """<!DOCTYPE html><html><body style="margin:0;padding:0;backgrou
 
 def show_loading(subtitle: str = ""):
     """
-    Εμφανίζει το WT+BESS animation μέσω components.html()
-    (το μόνο που εκτελεί JS αξιόπιστα στο Streamlit).
-    Επιστρέφει το placeholder — κάλεσε .empty() μετά την κλήση σου.
+    Επιστρέφει context manager για χρήση με 'with':
+        with show_loading("DAM Prices · Ελλάδα"):
+            results = api_call()
+    Χρησιμοποιεί st.spinner (αξιόπιστο, χωρίς rerun side-effects).
     """
-    ph = st.empty()
-    html = _LOADING_HTML
-    if subtitle:
-        html = html.replace(
-            '<div id="sub" style="font-size:11px;color:#666;"></div>',
-            f'<div id="sub" style="font-size:11px;color:#666;">{subtitle}</div>'
-        )
-    with ph:
-        components.html(html, height=280)
-    return ph
+    import contextlib
+    label = f"Ανάκτηση δεδομένων... {subtitle}" if subtitle else "Ανάκτηση δεδομένων..."
+
+    @contextlib.contextmanager
+    def _ctx():
+        with st.spinner(label):
+            yield
+
+    return _ctx()
 
 
 from config import ENTSO_TOKEN, APP_TITLE
@@ -351,15 +351,14 @@ with tab_entso:
     else:
         if st.button("🔎 Έλεγχος διαθεσιμότητας", key="entso_check"):
 
-            _ph = show_loading(f"{entso_date_from} → {entso_date_to} · {len(selected_countries)} χώρες")
-            availability = entso_check(
+            with show_loading(f"{entso_date_from} → {entso_date_to} · {len(selected_countries)} χώρες"):
+                availability = entso_check(
                     dataset_keys  = selected_datasets,
                     country_names = selected_countries,
                     dt_from       = dt_from,
                     dt_to         = dt_to,
                     api_token     = ENTSO_TOKEN,
-            )
-            _ph.empty()
+                )
 
             # Φτιάχνουμε πίνακα: γραμμές=χώρες, στήλες=datasets
             badge = {"ok": "✅", "partial": "⚠️", "unavailable": "—"}
@@ -389,15 +388,14 @@ with tab_entso:
         elif not selected_datasets:
             st.warning("Επίλεξε τουλάχιστον μία κατηγορία.")
         else:
-            _ph = show_loading(f"{entso_date_from} → {entso_date_to} · {len(selected_countries)} χώρες")
-            results = entso_get_data(
+            with show_loading(f"{entso_date_from} → {entso_date_to} · {len(selected_countries)} χώρες"):
+                results = entso_get_data(
                     dataset_keys  = selected_datasets,
                     country_names = selected_countries,
                     dt_from       = dt_from,
                     dt_to         = dt_to,
                     api_token     = ENTSO_TOKEN,
-            )
-            _ph.empty()
+                )
 
             # Αποθηκεύουμε τα αποτελέσματα στο session_state
             # ώστε να μην χαθούν όταν ο χρήστης πατήσει "Λήψη"
@@ -530,9 +528,8 @@ with tab_admie:
     else:
         if st.button("🔎 Έλεγχος διαθεσιμότητας", key="admie_check"):
 
-            _ph = show_loading(f"{admie_from_str} → {admie_to_str} · {len(selected_filetypes)} filetypes")
-            avail = admie_check(selected_filetypes, admie_from_str, admie_to_str)
-            _ph.empty()
+            with show_loading(f"{admie_from_str} → {admie_to_str} · {len(selected_filetypes)} filetypes"):
+                avail = admie_check(selected_filetypes, admie_from_str, admie_to_str)
 
             avail_rows = []
             for ft, info in avail.items():
@@ -571,13 +568,12 @@ with tab_admie:
         if not selected_filetypes:
             st.warning("Επίλεξε τουλάχιστον έναν τύπο δεδομένων.")
         else:
-            _ph = show_loading(f"{admie_from_str} → {admie_to_str} · {len(selected_filetypes)} filetypes")
-            admie_results = admie_get_data(
+            with show_loading(f"{admie_from_str} → {admie_to_str} · {len(selected_filetypes)} filetypes"):
+                admie_results = admie_get_data(
                     filetype_keys = selected_filetypes,
                     date_from     = admie_from_str,
                     date_to       = admie_to_str,
-            )
-            _ph.empty()
+                )
 
             # Αποθηκεύουμε και την τρέχουσα επιλογή για μελλοντικό validation
             st.session_state["admie_results"]     = admie_results
