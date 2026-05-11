@@ -248,6 +248,10 @@ with tab_entso:
         elif not selected_datasets:
             st.warning("Επίλεξε τουλάχιστον μία κατηγορία.")
         else:
+            # Καθαρίζουμε παλιά αποτελέσματα πριν τη νέα αναζήτηση
+            for k in ["entso_results", "entso_datasets", "entso_countries_sel"]:
+                st.session_state.pop(k, None)
+
             with st.spinner("Ανάκτηση δεδομένων από ENTSO-E..."):
                 results = entso_get_data(
                     dataset_keys  = selected_datasets,
@@ -288,28 +292,28 @@ with tab_entso:
                 st.markdown(f"**Περίοδος:** {entso_date_from} → {entso_date_to}")
                 st.markdown(f"**Χώρες:** {', '.join(countries)}")
                 st.markdown(f"**Κατηγορίες:** {', '.join([CATALOG[k]['label'] for k in ds_keys])}")
+
+            st.divider()
+
+            # ── 3.6 ΛΗΨΗ EXCEL ── εμφανίζεται μόνο αν υπάρχουν δεδομένα
+            xlsx_bytes = export_entso(
+                results       = results,
+                dataset_keys  = ds_keys,
+                country_names = countries,
+                dt_from       = dt_from,
+                dt_to         = dt_to,
+            )
+
+            st.download_button(
+                label     = "⬇️ **Λήψη Excel**",
+                data      = xlsx_bytes,
+                file_name = f"ENTSO-E_{entso_date_from}_{entso_date_to}.xlsx",
+                mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width = True,
+            )
+
         else:
             st.warning("Δεν βρέθηκαν δεδομένα για τις επιλεγμένες παραμέτρους.")
-            st.stop()
-
-        st.divider()
-
-        # ── 3.6 ΛΗΨΗ EXCEL ── εμφανίζεται μόνο αν υπάρχουν δεδομένα
-        xlsx_bytes = export_entso(
-            results       = results,
-            dataset_keys  = ds_keys,
-            country_names = countries,
-            dt_from       = dt_from,
-            dt_to         = dt_to,
-        )
-
-        st.download_button(
-            label     = "⬇️ **Λήψη Excel**",
-            data      = xlsx_bytes,
-            file_name = f"ENTSO-E_{entso_date_from}_{entso_date_to}.xlsx",
-            mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width = True,
-        )
 
 
 # ════════════════════════════════════════════════════════════
@@ -411,6 +415,10 @@ with tab_admie:
         if not selected_filetypes:
             st.warning("Επίλεξε τουλάχιστον έναν τύπο δεδομένων.")
         else:
+            # Καθαρίζουμε παλιά αποτελέσματα πριν τη νέα αναζήτηση
+            for k in ["admie_results", "admie_filetypes"]:
+                st.session_state.pop(k, None)
+
             with st.spinner("Ανάκτηση δεδομένων από ΑΔΜΗΕ..."):
                 admie_results = admie_get_data(
                     filetype_keys = selected_filetypes,
@@ -442,27 +450,27 @@ with tab_admie:
                 st.markdown(f"**Πηγή:** ΑΔΜΗΕ File API")
                 st.markdown(f"**Περίοδος:** {admie_date_from} → {admie_date_to}")
                 st.markdown(f"**Filetypes:** {', '.join(ft_keys)}")
+
+            st.divider()
+
+            # ── 4.5 ΛΗΨΗ EXCEL ── εμφανίζεται μόνο αν υπάρχουν δεδομένα
+            xlsx_bytes = export_admie(
+                results       = admie_results,
+                filetype_keys = ft_keys,
+                dt_from       = admie_from_str,
+                dt_to         = admie_to_str,
+            )
+
+            st.download_button(
+                label     = "⬇️ **Λήψη Excel**",
+                data      = xlsx_bytes,
+                file_name = f"ADMIE_{admie_date_from}_{admie_date_to}.xlsx",
+                mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width = True,
+            )
+
         else:
             st.warning("Δεν βρέθηκαν δεδομένα για τις επιλεγμένες παραμέτρους.")
-            st.stop()
-
-        st.divider()
-
-        # ── 4.5 ΛΗΨΗ EXCEL ── εμφανίζεται μόνο αν υπάρχουν δεδομένα
-        xlsx_bytes = export_admie(
-            results       = admie_results,
-            filetype_keys = ft_keys,
-            dt_from       = admie_from_str,
-            dt_to         = admie_to_str,
-        )
-
-        st.download_button(
-            label     = "⬇️ **Λήψη Excel**",
-            data      = xlsx_bytes,
-            file_name = f"ADMIE_{admie_date_from}_{admie_date_to}.xlsx",
-            mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width = True,
-        )
 
 
 # ════════════════════════════════════════════════════════════
@@ -476,44 +484,34 @@ with tab_about:
     col_left, col_center, col_right = st.columns([1, 2, 1])
 
     with col_center:
-        st.markdown("""
-<div style="
-    background: #1a1d24;
-    border: 1px solid #333;
-    border-radius: 12px;
-    padding: 40px 48px;
-    text-align: center;
-">
-    <div style="font-size: 64px; margin-bottom: 16px;">⚡</div>
-    <h2 style="margin: 0 0 4px 0; color: #ffffff; font-size: 26px;">Energy Data Downloader</h2>
-    <p style="color: #888; font-size: 13px; margin: 0 0 32px 0;">
-        ENTSO-E Transparency Platform &amp; ΑΔΜΗΕ API Client
-    </p>
 
-    <hr style="border: none; border-top: 1px solid #333; margin: 0 0 28px 0;">
+        about_html = (
+            '<div style="background:#1a1d24; border:1px solid #333; border-radius:12px;'
+            ' padding:40px 48px; text-align:center;">'
+            '<div style="font-size:64px; margin-bottom:16px;">⚡</div>'
+            '<h2 style="margin:0 0 4px 0; color:#ffffff; font-size:26px;">Energy Data Downloader</h2>'
+            '<p style="color:#888; font-size:13px; margin:0 0 32px 0;">'
+            'ENTSO-E Transparency Platform &amp; ΑΔΜΗΕ API Client</p>'
+            '<hr style="border:none; border-top:1px solid #333; margin:0 0 28px 0;">'
+            '<p style="font-size:13px; color:#aaa; margin:0 0 6px 0;'
+            ' letter-spacing:1px; text-transform:uppercase;">Developer</p>'
+            '<h3 style="margin:0 0 4px 0; color:#ffffff; font-size:22px;">Routos Konstantinos</h3>'
+            '<p style="color:#888; font-size:14px; margin:0 0 28px 0;">'
+            'Mechanical Engineering<br>'
+            '<span style="color:#666;">University of West Attica</span></p>'
+            '<div style="display:flex; justify-content:center; gap:16px; flex-wrap:wrap;">'
+            '<a href="https://www.linkedin.com/in/YOUR_LINKEDIN" target="_blank"'
+            ' style="display:inline-flex; align-items:center; gap:8px;'
+            ' background:#0077b5; color:white; text-decoration:none;'
+            ' padding:10px 22px; border-radius:8px; font-size:14px; font-weight:600;">'
+            '&#128279; LinkedIn</a>'
+            '<a href="https://github.com/KostasR13" target="_blank"'
+            ' style="display:inline-flex; align-items:center; gap:8px;'
+            ' background:#333; color:white; text-decoration:none;'
+            ' padding:10px 22px; border-radius:8px; font-size:14px; font-weight:600;">'
+            '&#128025; GitHub</a>'
+            '</div>'
+            '</div>'
+        )
 
-    <p style="font-size: 13px; color: #aaa; margin: 0 0 6px 0; letter-spacing: 1px; text-transform: uppercase;">Developer</p>
-    <h3 style="margin: 0 0 4px 0; color: #ffffff; font-size: 22px;">Routos Konstantinos</h3>
-    <p style="color: #888; font-size: 14px; margin: 0 0 28px 0;">
-        Mechanical Engineering<br>
-        <span style="color: #666;">University of West Attica</span>
-    </p>
-
-    <div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;">
-        <a href="https://www.linkedin.com/in/YOUR_LINKEDIN" target="_blank" style="
-            display: inline-flex; align-items: center; gap: 8px;
-            background: #0077b5; color: white; text-decoration: none;
-            padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600;
-        ">
-            🔗 LinkedIn
-        </a>
-        <a href="https://github.com/KostasR13" target="_blank" style="
-            display: inline-flex; align-items: center; gap: 8px;
-            background: #333; color: white; text-decoration: none;
-            padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600;
-        ">
-            🐙 GitHub
-        </a>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+        st.markdown(about_html, unsafe_allow_html=True)
