@@ -53,14 +53,14 @@ st.markdown("""
         z-index: 999;
     }
 
-    /* Download button — πράσινο χρώμα */
+    /* Download button — κόκκινο χρώμα */
     [data-testid="stDownloadButton"] > button {
-        background-color: #1D9E75;
+        background-color: #ff4b4b;
         color: white;
         border: none;
     }
     [data-testid="stDownloadButton"] > button:hover {
-        background-color: #157a5a;
+        background-color: #cc3a3a;
         color: white;
         border: none;
     }
@@ -82,7 +82,7 @@ st.divider()
 # 3. TABS
 # ============================================================
 
-tab_entso, tab_admie = st.tabs(["  ENTSO-E", "  ΑΔΜΗΕ"])
+tab_entso, tab_admie = st.tabs(["🌍  ENTSO-E", "🇬🇷  ΑΔΜΗΕ"])
 
 
 # ════════════════════════════════════════════════════════════
@@ -135,7 +135,7 @@ with tab_entso:
     st.divider()
 
     # ── 3.2 ΕΠΙΛΟΓΗ ΧΩΡΩΝ ───────────────────────────────────
-    st.subheader("Χώρες")
+    st.subheader("🌍 Χώρες")
 
     # Grid χωρών — αρχικοποίηση session_state (default: μόνο Ελλάδα)
     country_list = list(COUNTRIES.keys())
@@ -238,9 +238,9 @@ with tab_entso:
     st.divider()
 
     # ── 3.5 ΑΝΑΚΤΗΣΗ & ΠΡΟΕΠΙΣΚΟΠΗΣΗ ────────────────────────
-    st.subheader("📋 Προεπισκόπηση Δεδομένων")
+    st.subheader("📋 Δεδομένα")
 
-    if st.button("▶ Προεπισκόπηση Δεδομένων", key="entso_fetch",
+    if st.button("▶ Ανάκτηση δεδομένων", key="entso_fetch",
                  type="primary", use_container_width=True):
 
         if not selected_countries:
@@ -403,9 +403,9 @@ with tab_admie:
     st.divider()
 
     # ── 4.4 ΑΝΑΚΤΗΣΗ & ΠΡΟΕΠΙΣΚΟΠΗΣΗ ────────────────────────
-    st.subheader("📋 Προεπισκόπηση Δεδομένων")
+    st.subheader("📋 Δεδομένα")
 
-    if st.button("▶ Προεπισκόπηση Δεδομένων", key="admie_fetch",
+    if st.button("▶ Ανάκτηση δεδομένων", key="admie_fetch",
                  type="primary", use_container_width=True):
 
         if not selected_filetypes:
