@@ -53,17 +53,16 @@ st.markdown("""
         z-index: 999;
     }
 
-    /* Download button — λευκό με πράσινο (Excel style) */
+    /* Download button — πράσινο χρώμα */
     [data-testid="stDownloadButton"] > button {
-        background-color: #ffffff;
-        color: #1D6F42;
-        border: 2px solid #1D6F42;
-        font-weight: 600;
+        background-color: #1D9E75;
+        color: white;
+        border: none;
     }
     [data-testid="stDownloadButton"] > button:hover {
-        background-color: #e8f5e9;
-        color: #1D6F42;
-        border: 2px solid #1D6F42;
+        background-color: #157a5a;
+        color: white;
+        border: none;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -83,7 +82,7 @@ st.divider()
 # 3. TABS
 # ============================================================
 
-tab_entso, tab_admie = st.tabs(["ENTSO-E", "ΑΔΜΗΕ"])
+tab_entso, tab_admie = st.tabs(["  ENTSO-E", "  ΑΔΜΗΕ"])
 
 
 # ════════════════════════════════════════════════════════════
@@ -239,7 +238,7 @@ with tab_entso:
     st.divider()
 
     # ── 3.5 ΑΝΑΚΤΗΣΗ & ΠΡΟΕΠΙΣΚΟΠΗΣΗ ────────────────────────
-    st.subheader("📋 Δεδομένα")
+    st.subheader("📋 Προεπισκόπηση Δεδομένων")
 
     if st.button("▶ Προεπισκόπηση Δεδομένων", key="entso_fetch",
                  type="primary", use_container_width=True):
@@ -305,7 +304,7 @@ with tab_entso:
         )
 
         st.download_button(
-            label     = "⊞ Λήψη Excel",
+            label     = "⬇️ Λήψη Excel",
             data      = xlsx_bytes,
             file_name = f"ENTSO-E_{entso_date_from}_{entso_date_to}.xlsx",
             mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -404,7 +403,7 @@ with tab_admie:
     st.divider()
 
     # ── 4.4 ΑΝΑΚΤΗΣΗ & ΠΡΟΕΠΙΣΚΟΠΗΣΗ ────────────────────────
-    st.subheader("📋 Δεδομένα")
+    st.subheader("📋 Προεπισκόπηση Δεδομένων")
 
     if st.button("▶ Προεπισκόπηση Δεδομένων", key="admie_fetch",
                  type="primary", use_container_width=True):
@@ -458,7 +457,7 @@ with tab_admie:
         )
 
         st.download_button(
-            label     = "⊞ Λήψη Excel",
+            label     = "⬇️ Λήψη Excel",
             data      = xlsx_bytes,
             file_name = f"ADMIE_{admie_date_from}_{admie_date_to}.xlsx",
             mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
