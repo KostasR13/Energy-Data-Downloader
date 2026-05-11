@@ -9,8 +9,6 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
 import io
-import base64
-import os
 
 from config import ENTSO_TOKEN, APP_TITLE
 from entso_client import CATALOG, COUNTRIES, get_data as entso_get_data, check_availability as entso_check
@@ -55,7 +53,7 @@ st.markdown("""
         z-index: 999;
     }
 
-    /* Download button — λευκό με πράσινο κείμενο (Excel style) */
+    /* Download button — λευκό με πράσινο (Excel style) */
     [data-testid="stDownloadButton"] > button {
         background-color: #ffffff;
         color: #1D6F42;
@@ -70,20 +68,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
-
-# ── Helper: φόρτωση εικονιδίου Excel ──────────────────────────────────────────
-def _excel_icon_html() -> str:
-    """Επιστρέφει το εικονίδιο Excel ως base64 img tag (αν υπάρχει το αρχείο)."""
-    icon_path = os.path.join(os.path.dirname(__file__), "excel.png")
-    if os.path.exists(icon_path):
-        with open(icon_path, "rb") as _f:
-            _b64 = base64.b64encode(_f.read()).decode()
-        return f'<img src="data:image/png;base64,{_b64}" style="height:18px;vertical-align:middle;margin-right:6px;">' 
-    return ""
-
-_EXCEL_ICON = _excel_icon_html()
-_DOWNLOAD_LABEL = f"{_EXCEL_ICON} Λήψη Excel"
 
 # ============================================================
 # 2. ΤΙΤΛΟΣ
@@ -321,7 +305,7 @@ with tab_entso:
         )
 
         st.download_button(
-            label     = _DOWNLOAD_LABEL,
+            label     = "⊞ Λήψη Excel",
             data      = xlsx_bytes,
             file_name = f"ENTSO-E_{entso_date_from}_{entso_date_to}.xlsx",
             mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -474,7 +458,7 @@ with tab_admie:
         )
 
         st.download_button(
-            label     = _DOWNLOAD_LABEL,
+            label     = "⊞ Λήψη Excel",
             data      = xlsx_bytes,
             file_name = f"ADMIE_{admie_date_from}_{admie_date_to}.xlsx",
             mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
