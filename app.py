@@ -248,10 +248,6 @@ with tab_entso:
         elif not selected_datasets:
             st.warning("Επίλεξε τουλάχιστον μία κατηγορία.")
         else:
-            # Καθαρίζουμε παλιά αποτελέσματα πριν τη νέα αναζήτηση
-            for k in ["entso_results", "entso_datasets", "entso_countries_sel"]:
-                st.session_state.pop(k, None)
-
             with st.spinner("Ανάκτηση δεδομένων από ENTSO-E..."):
                 results = entso_get_data(
                     dataset_keys  = selected_datasets,
@@ -415,10 +411,6 @@ with tab_admie:
         if not selected_filetypes:
             st.warning("Επίλεξε τουλάχιστον έναν τύπο δεδομένων.")
         else:
-            # Καθαρίζουμε παλιά αποτελέσματα πριν τη νέα αναζήτηση
-            for k in ["admie_results", "admie_filetypes"]:
-                st.session_state.pop(k, None)
-
             with st.spinner("Ανάκτηση δεδομένων από ΑΔΜΗΕ..."):
                 admie_results = admie_get_data(
                     filetype_keys = selected_filetypes,
@@ -500,7 +492,7 @@ with tab_about:
             'Mechanical Engineering<br>'
             '<span style="color:#666;">University of West Attica</span></p>'
             '<div style="display:flex; justify-content:center; gap:16px; flex-wrap:wrap;">'
-            '<a href="https://www.linkedin.com/in/YOUR_LINKEDIN" target="_blank"'
+            '<a href="https://www.linkedin.com/in/routos-konstantinos/" target="_blank"'
             ' style="display:inline-flex; align-items:center; gap:8px;'
             ' background:#0077b5; color:white; text-decoration:none;'
             ' padding:10px 22px; border-radius:8px; font-size:14px; font-weight:600;">'
