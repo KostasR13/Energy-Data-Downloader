@@ -17,6 +17,127 @@ from exporter      import export_entso, export_admie
 
 
 # ============================================================
+# LOADING SCREEN HTML — εμφανίζεται κατά έλεγχο & ανάκτηση
+# ============================================================
+# Χρησιμοποιούμε st.empty() + components.html() αντί για spinner
+# ώστε να μπορούμε να δείξουμε custom SVG animation.
+# Η συνάρτηση show_loading() επιστρέφει το placeholder,
+# που το καθαρίζουμε με .empty() μόλις τελειώσει η κλήση.
+
+def show_loading(subtitle: str = "") -> "st.empty":
+    """
+    Εμφανίζει το loading screen (WT + BESS) και επιστρέφει
+    το st.empty() placeholder ώστε να το καθαρίσεις μετά:
+
+        ph = show_loading("DAM Prices · Ελλάδα")
+        κάνε_την_κλήση_σου()
+        ph.empty()
+    """
+    ph = st.empty()
+    ph.markdown(f"""
+<div style="display:flex;justify-content:center;padding:16px 0;">
+<div style="display:flex;flex-direction:column;align-items:center;gap:16px;
+            padding:28px 24px;background:#0e1117;border:0.5px solid #333;
+            border-radius:12px;min-width:340px;">
+<style>
+  @keyframes rot  {{ from{{transform:rotate(0deg)}} to{{transform:rotate(360deg)}} }}
+  .ld-spin {{ transform-origin:90px 80px; animation:rot 3s linear infinite; }}
+  @keyframes fd {{
+    0%  {{ transform:translateX(0);    opacity:0; }}
+    10% {{ opacity:1; }} 90%{{opacity:1;}}
+    100%{{ transform:translateX(70px); opacity:0; }}
+  }}
+  .ld-fd1{{animation:fd 1.6s linear infinite;}}
+  .ld-fd2{{animation:fd 1.6s linear infinite;animation-delay:.53s;}}
+  .ld-fd3{{animation:fd 1.6s linear infinite;animation-delay:1.06s;}}
+  @keyframes ld-dots{{0%{{content:''}}25%{{content:'.'}}50%{{content:'..'}}75%{{content:'...'}}}}
+  .ld-dots::after{{content:'';animation:ld-dots 1.5s steps(4,end) infinite;}}
+  .ld-cdim{{ opacity:0.12; transition:opacity 0.15s ease; }}
+  .ld-con {{ opacity:1;    transition:opacity 0.15s ease; }}
+</style>
+<svg width="380" height="220" viewBox="0 0 460 268" xmlns="http://www.w3.org/2000/svg">
+  <!-- Wind Turbine -->
+  <polygon points="86,92 94,92 99,240 81,240" fill="#D3D1C7" stroke="#B4B2A9" stroke-width="0.5"/>
+  <rect x="79" y="69" width="22" height="22" rx="5" fill="#B4B2A9" stroke="#888780" stroke-width="0.8"/>
+  <line x1="79" y1="80" x2="101" y2="80" stroke="#888780" stroke-width="0.5"/>
+  <rect x="74" y="236" width="32" height="8" rx="2" fill="#B4B2A9"/>
+  <g class="ld-spin">
+    <path d="M 87,80 C 84,64 82,42 86,4 C 88,1 92,1 94,4 C 98,42 96,64 93,80 Z" fill="#1D9E75" stroke="#0F6E56" stroke-width="0.5"/>
+    <path d="M 87,80 C 84,64 82,42 86,4 C 88,1 92,1 94,4 C 98,42 96,64 93,80 Z" fill="#1D9E75" stroke="#0F6E56" stroke-width="0.5" transform="rotate(120 90 80)"/>
+    <path d="M 87,80 C 84,64 82,42 86,4 C 88,1 92,1 94,4 C 98,42 96,64 93,80 Z" fill="#1D9E75" stroke="#0F6E56" stroke-width="0.5" transform="rotate(240 90 80)"/>
+  </g>
+  <circle cx="90" cy="80" r="8" fill="#5F5E5A" stroke="#444441" stroke-width="1"/>
+  <circle cx="90" cy="80" r="3" fill="#2C2C2A"/>
+  <!-- Cable -->
+  <line x1="100" y1="240" x2="170" y2="240" stroke="#B4B2A9" stroke-width="2.5" stroke-dasharray="4,3"/>
+  <circle class="ld-fd1" cx="102" cy="240" r="3.5" fill="#1D9E75"/>
+  <circle class="ld-fd2" cx="102" cy="240" r="3.5" fill="#1D9E75"/>
+  <circle class="ld-fd3" cx="102" cy="240" r="3.5" fill="#1D9E75"/>
+  <!-- BESS % label -->
+  <text id="ld-pct" x="285" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#EF9F27" font-family="sans-serif">0%</text>
+  <!-- BESS terminals -->
+  <rect x="330" y="102" width="12" height="9" rx="3" fill="#888780"/>
+  <rect x="347" y="102" width="12" height="9" rx="3" fill="#888780"/>
+  <rect x="364" y="102" width="12" height="9" rx="3" fill="#888780"/>
+  <!-- BESS body -->
+  <rect x="170" y="112" width="230" height="128" rx="4" fill="#D3D1C7" stroke="#888780" stroke-width="1.5"/>
+  <rect id="ld-s1" x="200" y="114" width="37" height="124" rx="2" fill="#1D9E75" class="ld-cdim"/>
+  <rect id="ld-s2" x="241" y="114" width="37" height="124" rx="2" fill="#1D9E75" class="ld-cdim"/>
+  <rect id="ld-s3" x="282" y="114" width="37" height="124" rx="2" fill="#1D9E75" class="ld-cdim"/>
+  <rect id="ld-s4" x="323" y="114" width="37" height="124" rx="2" fill="#1D9E75" class="ld-cdim"/>
+  <rect id="ld-s5" x="364" y="114" width="34" height="124" rx="2" fill="#1D9E75" class="ld-cdim"/>
+  <line x1="198" y1="112" x2="198" y2="240" stroke="#888780" stroke-width="1"   opacity="0.7"/>
+  <line x1="239" y1="112" x2="239" y2="240" stroke="#888780" stroke-width="1.2" opacity="0.8"/>
+  <line x1="280" y1="112" x2="280" y2="240" stroke="#888780" stroke-width="1.2" opacity="0.8"/>
+  <line x1="321" y1="112" x2="321" y2="240" stroke="#888780" stroke-width="1.2" opacity="0.8"/>
+  <line x1="362" y1="112" x2="362" y2="240" stroke="#888780" stroke-width="1.2" opacity="0.8"/>
+  <!-- Door -->
+  <rect x="174" y="122" width="22" height="90" rx="1" fill="#B4B2A9" stroke="#888780" stroke-width="0.8"/>
+  <rect x="174" y="132" width="3" height="6" rx="1" fill="#888780"/>
+  <rect x="174" y="194" width="3" height="6" rx="1" fill="#888780"/>
+  <rect x="193" y="162" width="2" height="12" rx="1" fill="#888780"/>
+  <polygon points="183,148 177,160 189,160" fill="none" stroke="#BA7517" stroke-width="1.1"/>
+  <text x="183" y="158" text-anchor="middle" font-size="8" fill="#BA7517">!</text>
+  <!-- Lightning bolt -->
+  <polygon points="254,122 242,156 251,156 239,190 268,150 257,150 270,122" fill="#EF9F27" opacity="0.9"/>
+  <!-- BESS label -->
+  <text x="345" y="196" text-anchor="middle" font-size="22" font-weight="700" fill="#EF9F27" opacity="0.9" font-family="sans-serif">BESS</text>
+  <!-- Base -->
+  <rect x="166" y="240" width="238" height="8" rx="2" fill="#B4B2A9"/>
+  <rect x="178" y="236" width="14" height="6" rx="1" fill="#888780"/>
+  <rect x="376" y="236" width="14" height="6" rx="1" fill="#888780"/>
+</svg>
+<div style="font-size:14px;color:#aaa;">Ανάκτηση δεδομένων<span class="ld-dots"></span></div>
+{"<div style='font-size:11px;color:#666;'>" + subtitle + "</div>" if subtitle else ""}
+</div>
+</div>
+<script>
+(function(){{
+  const DUR=5000;
+  const lbl=document.getElementById('ld-pct');
+  const segs=[1,2,3,4,5].map(i=>document.getElementById('ld-s'+i));
+  if(!lbl||!segs[0]) return;
+  function frame(now){{
+    const t=(now%DUR)/DUR;
+    let p=0;
+    if(t<0.78) p=t/0.78;
+    else if(t<0.92) p=1;
+    else p=0;
+    lbl.textContent=Math.round(p*100)+'%';
+    segs.forEach((s,i)=>{{
+      const on=p>=(i+1)*0.2;
+      s.className.baseVal=on?'ld-con':'ld-cdim';
+    }});
+    requestAnimationFrame(frame);
+  }}
+  requestAnimationFrame(frame);
+}})();
+</script>
+""", unsafe_allow_html=True)
+    return ph
+
+
+# ============================================================
 # 1. ΡΥΘΜΙΣΕΙΣ ΣΕΛΙΔΑΣ
 # ============================================================
 # Αυτό πρέπει να είναι η ΠΡΩΤΗ εντολή Streamlit στο αρχείο.
@@ -211,14 +332,15 @@ with tab_entso:
     else:
         if st.button("🔎 Έλεγχος διαθεσιμότητας", key="entso_check"):
 
-            with st.spinner("Ελέγχω διαθεσιμότητα..."):
-                availability = entso_check(
-                    dataset_keys  = selected_datasets,
-                    country_names = selected_countries,
-                    dt_from       = dt_from,
-                    dt_to         = dt_to,
-                    api_token     = ENTSO_TOKEN,
-                )
+            _ph = show_loading(f"{', '.join(selected_countries[:3])}")
+            availability = entso_check(
+                dataset_keys  = selected_datasets,
+                country_names = selected_countries,
+                dt_from       = dt_from,
+                dt_to         = dt_to,
+                api_token     = ENTSO_TOKEN,
+            )
+            _ph.empty()
 
             # Φτιάχνουμε πίνακα: γραμμές=χώρες, στήλες=datasets
             badge = {"ok": "✅", "partial": "⚠️", "unavailable": "—"}
@@ -240,7 +362,7 @@ with tab_entso:
     # ── 3.5 ΑΝΑΚΤΗΣΗ & ΠΡΟΕΠΙΣΚΟΠΗΣΗ ────────────────────────
     st.subheader("📋 Δεδομένα")
 
-    if st.button("▶ Ανάκτηση δεδομένων", key="entso_fetch",
+    if st.button("▶ Ανάκτηση & Λήψη Excel", key="entso_fetch",
                  type="primary", use_container_width=True):
 
         if not selected_countries:
@@ -248,14 +370,15 @@ with tab_entso:
         elif not selected_datasets:
             st.warning("Επίλεξε τουλάχιστον μία κατηγορία.")
         else:
-            with st.spinner("Ανάκτηση δεδομένων από ENTSO-E..."):
-                results = entso_get_data(
-                    dataset_keys  = selected_datasets,
-                    country_names = selected_countries,
-                    dt_from       = dt_from,
-                    dt_to         = dt_to,
-                    api_token     = ENTSO_TOKEN,
-                )
+            _ph = show_loading(f"{', '.join(selected_countries[:3])} · {entso_date_from} → {entso_date_to}")
+            results = entso_get_data(
+                dataset_keys  = selected_datasets,
+                country_names = selected_countries,
+                dt_from       = dt_from,
+                dt_to         = dt_to,
+                api_token     = ENTSO_TOKEN,
+            )
+            _ph.empty()
 
             # Αποθηκεύουμε τα αποτελέσματα στο session_state
             # ώστε να μην χαθούν όταν ο χρήστης πατήσει "Λήψη"
@@ -387,8 +510,9 @@ with tab_admie:
     else:
         if st.button("🔎 Έλεγχος διαθεσιμότητας", key="admie_check"):
 
-            with st.spinner("Ελέγχω διαθεσιμότητα..."):
-                avail = admie_check(selected_filetypes, admie_from_str, admie_to_str)
+            _ph = show_loading(f"{', '.join(selected_filetypes[:3])} · {admie_from_str} → {admie_to_str}")
+            avail = admie_check(selected_filetypes, admie_from_str, admie_to_str)
+            _ph.empty()
 
             avail_rows = []
             for ft, info in avail.items():
@@ -421,18 +545,19 @@ with tab_admie:
             st.session_state.pop("admie_saved_dates", None)
             st.info("ℹ️ Η επιλογή σου άλλαξε. Κάνε νέα ανάκτηση δεδομένων.")
 
-    if st.button("▶ Ανάκτηση δεδομένων", key="admie_fetch",
+    if st.button("▶ Ανάκτηση & Λήψη Excel", key="admie_fetch",
                  type="primary", use_container_width=True):
 
         if not selected_filetypes:
             st.warning("Επίλεξε τουλάχιστον έναν τύπο δεδομένων.")
         else:
-            with st.spinner("Ανάκτηση δεδομένων από ΑΔΜΗΕ..."):
-                admie_results = admie_get_data(
-                    filetype_keys = selected_filetypes,
-                    date_from     = admie_from_str,
-                    date_to       = admie_to_str,
-                )
+            _ph = show_loading(f"{', '.join(selected_filetypes[:3])} · {admie_from_str} → {admie_to_str}")
+            admie_results = admie_get_data(
+                filetype_keys = selected_filetypes,
+                date_from     = admie_from_str,
+                date_to       = admie_to_str,
+            )
+            _ph.empty()
 
             # Αποθηκεύουμε και την τρέχουσα επιλογή για μελλοντικό validation
             st.session_state["admie_results"]     = admie_results
