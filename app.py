@@ -82,7 +82,7 @@ st.divider()
 # 3. TABS
 # ============================================================
 
-tab_entso, tab_admie = st.tabs(["🌍  ENTSO-E", "🇬🇷  ΑΔΜΗΕ"])
+tab_entso, tab_admie, tab_about = st.tabs(["🌍  ENTSO-E", "🇬🇷  ΑΔΜΗΕ", "ℹ️  About"])
 
 
 # ════════════════════════════════════════════════════════════
@@ -304,7 +304,7 @@ with tab_entso:
         )
 
         st.download_button(
-            label     = "⬇️ Λήψη Excel",
+            label     = "⬇️ **Λήψη Excel**",
             data      = xlsx_bytes,
             file_name = f"ENTSO-E_{entso_date_from}_{entso_date_to}.xlsx",
             mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -457,9 +457,63 @@ with tab_admie:
         )
 
         st.download_button(
-            label     = "⬇️ Λήψη Excel",
+            label     = "⬇️ **Λήψη Excel**",
             data      = xlsx_bytes,
             file_name = f"ADMIE_{admie_date_from}_{admie_date_to}.xlsx",
             mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width = True,
         )
+
+
+# ════════════════════════════════════════════════════════════
+# TAB 3: ABOUT
+# ════════════════════════════════════════════════════════════
+
+with tab_about:
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    col_left, col_center, col_right = st.columns([1, 2, 1])
+
+    with col_center:
+        st.markdown("""
+<div style="
+    background: #1a1d24;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 40px 48px;
+    text-align: center;
+">
+    <div style="font-size: 64px; margin-bottom: 16px;">⚡</div>
+    <h2 style="margin: 0 0 4px 0; color: #ffffff; font-size: 26px;">Energy Data Downloader</h2>
+    <p style="color: #888; font-size: 13px; margin: 0 0 32px 0;">
+        ENTSO-E Transparency Platform &amp; ΑΔΜΗΕ API Client
+    </p>
+
+    <hr style="border: none; border-top: 1px solid #333; margin: 0 0 28px 0;">
+
+    <p style="font-size: 13px; color: #aaa; margin: 0 0 6px 0; letter-spacing: 1px; text-transform: uppercase;">Developer</p>
+    <h3 style="margin: 0 0 4px 0; color: #ffffff; font-size: 22px;">Routos Konstantinos</h3>
+    <p style="color: #888; font-size: 14px; margin: 0 0 28px 0;">
+        Mechanical Engineering<br>
+        <span style="color: #666;">University of West Attica</span>
+    </p>
+
+    <div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;">
+        <a href="https://www.linkedin.com/in/YOUR_LINKEDIN" target="_blank" style="
+            display: inline-flex; align-items: center; gap: 8px;
+            background: #0077b5; color: white; text-decoration: none;
+            padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600;
+        ">
+            🔗 LinkedIn
+        </a>
+        <a href="https://github.com/KostasR13" target="_blank" style="
+            display: inline-flex; align-items: center; gap: 8px;
+            background: #333; color: white; text-decoration: none;
+            padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600;
+        ">
+            🐙 GitHub
+        </a>
+    </div>
+</div>
+""", unsafe_allow_html=True)
