@@ -300,6 +300,7 @@ def fetch(dataset_key: str, eic_code: str, dt_from: datetime, dt_to: datetime,
     # Μικρή αναμονή ώστε να μην ξεπεράσουμε το rate limit
     time.sleep(REQUEST_DELAY_SEC)
 
+    print(f"[DEBUG] {dataset_key} | status={response.status_code} | {response.text[:300]}")  
     # Αποστολή GET request — η βιβλιοθήκη requests φτιάχνει αυτόματα το URL
     response = requests.get(BASE_URL, params=params, timeout=30)
 
