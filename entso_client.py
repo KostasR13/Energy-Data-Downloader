@@ -1,99 +1,82 @@
 """
 entso_client.py
 ---------------
-Επικοινωνία με το ENTSO-E Transparency Platform REST API.
+Επικοινωνία με το ENTSO-E Transparency Platform μέσω της βιβλιοθήκης entsoe-py.
+Η βιβλιοθήκη χειρίζεται αυτόματα: XML parsing, year-limiting, rate limiting, retry.
+
 Περιέχει:
-  - CATALOG   : λεξικό με όλα τα διαθέσιμα datasets
-  - COUNTRIES  : λεξικό χωρών → EIC code
-  - fetch()    : κάνει το HTTP request και επιστρέφει XML
-  - parse()    : μετατρέπει το XML σε pandas DataFrame
-  - get_data() : συνδυάζει fetch + parse (κύρια συνάρτηση)
+  - CATALOG          : λεξικό με όλα τα διαθέσιμα datasets
+  - COUNTRIES        : λεξικό χωρών → country code (για entsoe-py)
+  - get_data()       : κύρια συνάρτηση — επιστρέφει DataFrames
   - check_availability() : ελέγχει αν υπάρχουν δεδομένα για χώρα/dataset
 """
 
-import requests
-import xml.etree.ElementTree as ET
 import pandas as pd
-from datetime import datetime, timezone
 import pytz
-import time
-
+from datetime import datetime, timedelta
+from entsoe import EntsoePandasClient
+from entsoe.exceptions import NoMatchingDataError, InvalidBusinessParameterError
 
 # ============================================================
 # ΣΤΑΘΕΡΕΣ
 # ============================================================
 
-BASE_URL = "https://web-api.tp.entsoe.eu/api"
-
-# Ζώνη ώρας Ελλάδας — αλλάζουμε μόνο εδώ αν χρειαστεί
 LOCAL_TZ = pytz.timezone("Europe/Athens")
-
-# Rate limit: max 400 requests/λεπτό. Βάζουμε μικρή καθυστέρηση για ασφάλεια.
-REQUEST_DELAY_SEC = 0.2
 
 
 # ============================================================
 # CATALOG — Κατάλογος datasets
 # ============================================================
 # Κάθε dataset έχει:
-#   "label"        : το όνομα που βλέπει ο χρήστης στο UI
-#   "group"        : η ομάδα (για ομαδοποίηση στο UI)
-#   "documentType" : παράμετρος API — "τι είδους δεδομένα"
-#   "processType"  : παράμετρος API — "σε ποια αγορά/διαδικασία"
-#   "domain_param" : ποιο πεδίο του API δέχεται τον EIC code της χώρας
-#   "value_col"    : το όνομα που θα δώσουμε στη στήλη τιμών στο DataFrame
+#   "label"       : το όνομα που βλέπει ο χρήστης στο UI
+#   "group"       : η ομάδα (για ομαδοποίηση στο UI)
+#   "method"      : το όνομα της μεθόδου της EntsoePandasClient
+#   "extra_params": επιπλέον παράμετροι που χρειάζεται η μέθοδος
+#   "value_col"   : το όνομα που θα δώσουμε στη στήλη τιμών στο DataFrame
 
 CATALOG = {
 
     # --- ΤΙΜΕΣ ---
     "dam_prices": {
-        "label"        : "DAM Prices (€/MWh)",
+        "label"        : "DAM Prices (EUR/MWh)",
         "group"        : "Τιμές",
-        "documentType" : "A44",   # Price Document
-        "processType"  : "A01",   # Day Ahead
-        "domain_param" : "in_Domain",
-        "domain_param2": "out_Domain",   # DAM Prices χρειάζεται και τα 2
+        "method"       : "query_day_ahead_prices",
+        "extra_params" : {},
         "value_col"    : "Price_EUR_MWh",
     },
     "intraday_prices": {
-        "label"        : "Intraday Prices (€/MWh)",
+        "label"        : "Intraday Prices (EUR/MWh)",
         "group"        : "Τιμές",
-        "documentType" : "A44",
-        "processType"  : "A18",   # Intraday total
-        "domain_param" : "in_Domain",
-        "domain_param2": "out_Domain",   # ίδια λογική με DAM
+        "method"       : "query_intraday_prices",
+        "extra_params" : {"sequence": 1},
         "value_col"    : "Price_EUR_MWh",
     },
     "imbalance_prices": {
-        "label"        : "Imbalance Prices (€/MWh)",
+        "label"        : "Imbalance Prices (EUR/MWh)",
         "group"        : "Τιμές",
-        "documentType" : "A85",   # Imbalance prices
-        "processType"  : "A16",   # Realised
-        "domain_param" : "controlArea_Domain",
+        "method"       : "query_imbalance_prices",
+        "extra_params" : {},
         "value_col"    : "Price_EUR_MWh",
     },
     "afrr_contracted_prices": {
-        "label"        : "aFRR Contracted Prices (€/MW)",
+        "label"        : "aFRR Contracted Prices (EUR/MW)",
         "group"        : "Τιμές",
-        "documentType" : "A89",   # Contracted reserve prices
-        "processType"  : "A51",   # aFRR
-        "domain_param" : "controlArea_Domain",
+        "method"       : "query_contracted_reserve_prices",
+        "extra_params" : {"process_type": "A51", "type_marketagreement_type": "A01"},
         "value_col"    : "Price_EUR_MW",
     },
     "mfrr_contracted_prices": {
-        "label"        : "mFRR Contracted Prices (€/MW)",
+        "label"        : "mFRR Contracted Prices (EUR/MW)",
         "group"        : "Τιμές",
-        "documentType" : "A89",
-        "processType"  : "A47",   # mFRR
-        "domain_param" : "controlArea_Domain",
+        "method"       : "query_contracted_reserve_prices",
+        "extra_params" : {"process_type": "A47", "type_marketagreement_type": "A01"},
         "value_col"    : "Price_EUR_MW",
     },
     "mfrr_activated_prices": {
-        "label"        : "mFRR Activated Prices (€/MWh)",
+        "label"        : "mFRR Activated Prices (EUR/MWh)",
         "group"        : "Τιμές",
-        "documentType" : "A84",   # Activated balancing prices
-        "processType"  : "A47",
-        "domain_param" : "controlArea_Domain",
+        "method"       : "query_activated_balancing_energy_prices",
+        "extra_params" : {"process_type": "A47"},
         "value_col"    : "Price_EUR_MWh",
     },
 
@@ -101,17 +84,15 @@ CATALOG = {
     "actual_load": {
         "label"        : "Actual Load (MW)",
         "group"        : "Φορτίο",
-        "documentType" : "A65",   # System total load
-        "processType"  : "A16",   # Realised
-        "domain_param" : "outBiddingZone_Domain",
+        "method"       : "query_load",
+        "extra_params" : {},
         "value_col"    : "Load_MW",
     },
     "load_forecast": {
         "label"        : "Load Forecast D-1 (MW)",
         "group"        : "Φορτίο",
-        "documentType" : "A65",
-        "processType"  : "A01",   # Day Ahead
-        "domain_param" : "outBiddingZone_Domain",
+        "method"       : "query_load_forecast",
+        "extra_params" : {"process_type": "A01"},
         "value_col"    : "LoadForecast_MW",
     },
 
@@ -119,25 +100,22 @@ CATALOG = {
     "generation_per_type": {
         "label"        : "Generation per Type (MW)",
         "group"        : "Παραγωγή",
-        "documentType" : "A75",   # Actual generation per type
-        "processType"  : "A16",
-        "domain_param" : "in_Domain",
+        "method"       : "query_generation",
+        "extra_params" : {},
         "value_col"    : "Generation_MW",
     },
     "wind_solar_forecast": {
         "label"        : "Wind & Solar Forecast (MW)",
         "group"        : "Παραγωγή",
-        "documentType" : "A69",   # Wind and solar forecast
-        "processType"  : "A01",
-        "domain_param" : "in_Domain",
+        "method"       : "query_wind_and_solar_forecast",
+        "extra_params" : {},
         "value_col"    : "Forecast_MW",
     },
     "installed_capacity": {
         "label"        : "Installed Capacity (MW)",
         "group"        : "Παραγωγή",
-        "documentType" : "A71",   # Generation installed capacity
-        "processType"  : "A33",   # Year Ahead
-        "domain_param" : "in_Domain",
+        "method"       : "query_installed_generation_capacity",
+        "extra_params" : {},
         "value_col"    : "Capacity_MW",
     },
 
@@ -145,298 +123,184 @@ CATALOG = {
     "fcr_contracted": {
         "label"        : "FCR Contracted (MW)",
         "group"        : "Εφεδρείες",
-        "documentType" : "A81",   # Contracted reserves
-        "processType"  : "A52",   # FCR
-        "domain_param" : "controlArea_Domain",
+        "method"       : "query_contracted_reserve_amount",
+        "extra_params" : {"process_type": "A52", "type_marketagreement_type": "A01"},
         "value_col"    : "Quantity_MW",
     },
     "afrr_contracted_qty": {
         "label"        : "aFRR Contracted Qty (MW)",
         "group"        : "Εφεδρείες",
-        "documentType" : "A81",
-        "processType"  : "A51",
-        "domain_param" : "controlArea_Domain",
+        "method"       : "query_contracted_reserve_amount",
+        "extra_params" : {"process_type": "A51", "type_marketagreement_type": "A01"},
         "value_col"    : "Quantity_MW",
     },
     "mfrr_activated_qty": {
         "label"        : "mFRR Activated Qty (MWh)",
         "group"        : "Εφεδρείες",
-        "documentType" : "A83",   # Activated balancing quantities
-        "processType"  : "A47",
-        "domain_param" : "controlArea_Domain",
+        "method"       : "query_activated_balancing_energy",
+        "extra_params" : {"business_type": "A97"},
         "value_col"    : "Quantity_MWh",
     },
 
     # --- ΔΙΑΣΥΝΔΕΣΕΙΣ ---
-    "crossborder_flows": {
-        "label"        : "Cross-border Flows (MW)",
-        "group"        : "Διασυνδέσεις",
-        "documentType" : "A11",   # Aggregated energy data report
-        "processType"  : "A16",
-        "domain_param" : "in_Domain",   # + out_Domain χρειάζεται — βλ. fetch()
-        "value_col"    : "Flow_MW",
-    },
-    "scheduled_exchanges": {
-        "label"        : "Scheduled Exchanges (MW)",
-        "group"        : "Διασυνδέσεις",
-        "documentType" : "A09",   # Finalised schedule
-        "processType"  : "A01",
-        "domain_param" : "in_Domain",
-        "value_col"    : "Schedule_MW",
-    },
+    # Σημείωση: crossborder_flows και scheduled_exchanges χρειάζονται
+    # χώρα προέλευσης ΚΑΙ χώρα προορισμού. Δεν υποστηρίζονται
+    # στο τρέχον UI που επιλέγει μόνο 1 χώρα.
+    # Αφαιρούνται προσωρινά για να μην μπερδεύει ο χρήστης.
 }
 
 
 # ============================================================
-# COUNTRIES — Χώρες & EIC codes
+# COUNTRIES — Χώρες & country codes για entsoe-py
 # ============================================================
-# EIC (Energy Identification Code) = ο μοναδικός κωδικός κάθε χώρας/ζώνης.
-# Χρησιμοποιούμε τους κωδικούς BZN (Bidding Zone) όπου υπάρχουν.
+# Η entsoe-py δέχεται απευθείας 2-γράμματους κωδικούς χωρών (ISO 3166-1)
+# ή Area enums. Χρησιμοποιούμε strings για απλότητα.
+# Για χώρες με πολλές bidding zones (π.χ. Νορβηγία, Δανία, Ιταλία, Σουηδία)
+# χρησιμοποιούμε τους κωδικούς ζωνών που αναγνωρίζει η βιβλιοθήκη.
 
 COUNTRIES = {
-    "Albania"          : "10YAL-KESH-----5",
-    "Austria"          : "10YAT-APG------L",
-    "Belgium"          : "10YBE----------2",
-    "Bosnia & Herz."   : "10YBA-JPCC-----D",
-    "Bulgaria"         : "10YCA-BULGARIA-R",
-    "Croatia"          : "10YHR-HEP------M",
-    "Cyprus"           : "10YCY-1001A0003J",
-    "Czech Republic"   : "10YCZ-CEPS-----N",
-    "Denmark (DK1)"    : "10YDK-1--------W",
-    "Denmark (DK2)"    : "10YDK-2--------M",
-    "Estonia"          : "10Y1001A1001A39I",
-    "Finland"          : "10YFI-1--------U",
-    "France"           : "10YFR-RTE------C",
-    "Germany/Lux."     : "10Y1001A1001A82H",
-    "Great Britain"    : "10YGB----------A",
-    "Greece"           : "10YGR-HTSO-----Y",
-    "Hungary"          : "10YHU-MAVIR----U",
-    "Ireland (SEM)"    : "10Y1001A1001A59C",
-    "Italy (North)"    : "10YIT-GRTN-----B",
-    "Kosovo"           : "10Y1001C--00100H",
-    "Latvia"           : "10YLV-1001A00074",
-    "Lithuania"        : "10YLT-1001A0008Q",
-    "Luxembourg"       : "10YLU-CEGEDEL-NQ",
-    "Malta"            : "10Y1001A1001A93C",
-    "Moldova"          : "10Y1001A1001A990",
-    "Montenegro"       : "10YCS-CG-TSO---S",
-    "Netherlands"      : "10YNL----------L",
-    "North Macedonia"  : "10YMK-MEPSO----8",
-    "Norway (NO1)"     : "10YNO-1--------2",
-    "Norway (NO2)"     : "10YNO-2--------T",
-    "Poland"           : "10YPL-AREA-----S",
-    "Portugal"         : "10YPT-REN------W",
-    "Romania"          : "10YRO-TEL------P",
-    "Serbia"           : "10YCS-SERBIATSOV",
-    "Slovakia"         : "10YSK-SEPS-----K",
-    "Slovenia"         : "10YSI-ELES-----O",
-    "Spain"            : "10YES-REE------0",
-    "Sweden (SE1)"     : "10Y1001A1001A44P",
-    "Sweden (SE2)"     : "10Y1001A1001A45N",
-    "Sweden (SE3)"     : "10Y1001A1001A46L",
-    "Sweden (SE4)"     : "10Y1001A1001A47J",
-    "Switzerland"      : "10YCH-SWISSGRIDZ",
-    "Turkey"           : "10YTR-TEIAS----W",
-    "Ukraine"          : "10Y1001C--00003F",
+    "Albania"          : "AL",
+    "Austria"          : "AT",
+    "Belgium"          : "BE",
+    "Bosnia & Herz."   : "BA",
+    "Bulgaria"         : "BG",
+    "Croatia"          : "HR",
+    "Cyprus"           : "CY",
+    "Czech Republic"   : "CZ",
+    "Denmark (DK1)"    : "DK_1",
+    "Denmark (DK2)"    : "DK_2",
+    "Estonia"          : "EE",
+    "Finland"          : "FI",
+    "France"           : "FR",
+    "Germany/Lux."     : "DE_LU",
+    "Great Britain"    : "GB",
+    "Greece"           : "GR",
+    "Hungary"          : "HU",
+    "Ireland (SEM)"    : "IE_SEM",
+    "Italy (North)"    : "IT_NORTH",
+    "Kosovo"           : "XK",
+    "Latvia"           : "LV",
+    "Lithuania"        : "LT",
+    "Luxembourg"       : "LU",
+    "Malta"            : "MT",
+    "Moldova"          : "MD",
+    "Montenegro"       : "ME",
+    "Netherlands"      : "NL",
+    "North Macedonia"  : "MK",
+    "Norway (NO1)"     : "NO_1",
+    "Norway (NO2)"     : "NO_2",
+    "Poland"           : "PL",
+    "Portugal"         : "PT",
+    "Romania"          : "RO",
+    "Serbia"           : "RS",
+    "Slovakia"         : "SK",
+    "Slovenia"         : "SI",
+    "Spain"            : "ES",
+    "Sweden (SE1)"     : "SE_1",
+    "Sweden (SE2)"     : "SE_2",
+    "Sweden (SE3)"     : "SE_3",
+    "Sweden (SE4)"     : "SE_4",
+    "Switzerland"      : "CH",
+    "Turkey"           : "TR",
+    "Ukraine"          : "UA",
 }
 
 
 # ============================================================
-# ΒΟΗΘΗΤΙΚΗ ΣΥΝΑΡΤΗΣΗ: Μετατροπή ώρας
+# ΒΟΗΘΗΤΙΚΕΣ ΣΥΝΑΡΤΗΣΕΙΣ
 # ============================================================
 
-def to_utc_str(dt_local: datetime) -> str:
+def _make_timestamps(dt: datetime) -> pd.Timestamp:
     """
-    Μετατρέπει ένα datetime (ώρα Ελλάδας) σε string UTC για το API.
-    Παράδειγμα: datetime(2024,1,1,0,0) → "202401010000" (αφαίρεση 2 ή 3 ωρών)
-
-    Γιατί χρειάζεται: το API δέχεται ΠΑΝΤΑ UTC, ο χρήστης βλέπει τοπική ώρα.
+    Μετατρέπει datetime σε pd.Timestamp με timezone Ελλάδας.
+    Η entsoe-py απαιτεί timezone-aware Timestamps.
     """
-    # Προσθέτουμε πληροφορία ζώνης ώρας στο datetime (αν δεν έχει ήδη)
-    if dt_local.tzinfo is None:
-        dt_local = LOCAL_TZ.localize(dt_local)
-
-    # Μετατροπή σε UTC
-    dt_utc = dt_local.astimezone(pytz.utc)
-
-    # Επιστρέφουμε σε μορφή που θέλει το API: YYYYMMDDHHmm
-    return dt_utc.strftime("%Y%m%d%H%M")
+    if dt.tzinfo is None:
+        return pd.Timestamp(dt, tz="Europe/Athens")
+    # Αν έχει ήδη tzinfo (π.χ. UTC από το UI), κρατάμε ως έχει
+    return pd.Timestamp(dt)
 
 
-# ============================================================
-# ΚΥΡΙΑ ΣΥΝΑΡΤΗΣΗ 1: fetch()
-# ============================================================
-
-def fetch(dataset_key: str, eic_code: str, dt_from: datetime, dt_to: datetime,
-          api_token: str) -> requests.Response:
+def _normalize_to_df(raw, value_col: str, country_name: str,
+                     dataset_label: str) -> pd.DataFrame:
     """
-    Στέλνει ένα GET request στο ENTSO-E API και επιστρέφει το Response object.
+    Μετατρέπει την έξοδο της entsoe-py (Series ή DataFrame) στο
+    ομοιόμορφο format που περιμένει το υπόλοιπο σύστημα:
 
-    Παράμετροι:
-      dataset_key : κλειδί από το CATALOG (π.χ. "actual_load")
-      eic_code    : EIC code της χώρας (π.χ. "10YGR-HTSO-----Y")
-      dt_from     : ημερομηνία έναρξης (datetime, τοπική ώρα)
-      dt_to       : ημερομηνία λήξης   (datetime, τοπική ώρα)
-      api_token   : το προσωπικό token του χρήστη
+      Timestamp (UTC) | Timestamp (Local) | <value_col> | Country | Dataset
+      (+ PsrType αν υπάρχει)
+
+    Χειρίζεται:
+      - Series: απλή χρονοσειρά (π.χ. DAM prices)
+      - DataFrame με απλές στήλες (π.χ. actual load)
+      - DataFrame με MultiIndex στήλες (π.χ. generation per type)
     """
-    # Παίρνουμε τις παραμέτρους του dataset από τον CATALOG
-    ds = CATALOG[dataset_key]
-
-    # Φτιάχνουμε το dictionary των παραμέτρων που θα σταλούν στο URL
-    params = {
-        "securityToken" : api_token,
-        "documentType"  : ds["documentType"],
-        "processType"   : ds["processType"],
-        ds["domain_param"] : eic_code,   # το πεδίο διαφέρει ανά dataset
-        "periodStart"   : to_utc_str(dt_from),
-        "periodEnd"     : to_utc_str(dt_to),
-    }
-
-    # Ορισμένα datasets (π.χ. DAM Prices) χρειάζονται δεύτερο domain parameter
-    # π.χ. in_Domain + out_Domain με τον ίδιο EIC code
-    if "domain_param2" in ds:
-        params[ds["domain_param2"]] = eic_code
-
-    # Μικρή αναμονή ώστε να μην ξεπεράσουμε το rate limit
-    time.sleep(REQUEST_DELAY_SEC)
-
-    # Αποστολή GET request — η βιβλιοθήκη requests φτιάχνει αυτόματα το URL
-    response = requests.get(BASE_URL, params=params, timeout=30)
-
-    return response
-
-
-# ============================================================
-# ΚΥΡΙΑ ΣΥΝΑΡΤΗΣΗ 2: parse()
-# ============================================================
-
-def parse(response: requests.Response, dataset_key: str,
-          country_name: str) -> pd.DataFrame:
-    """
-    Μετατρέπει XML απάντηση του ENTSO-E σε pandas DataFrame.
-
-    Επιστρέφει DataFrame με στήλες:
-      - Timestamp (τοπική ώρα Ελλάδας)
-      - <value_col>  (π.χ. Load_MW, Price_EUR_MWh κ.λπ.)
-      - Country
-      - Dataset
-      - PsrType (μόνο αν υπάρχει — π.χ. για generation per type)
-
-    Αν δεν υπάρχουν δεδομένα, επιστρέφει κενό DataFrame.
-    """
-    ds = CATALOG[dataset_key]
-    value_col = ds["value_col"]
-
-    # Έλεγχος HTTP status
-    if response.status_code != 200:
-        return pd.DataFrame()   # κενό DataFrame → best-effort λογική
-
-    # Parse του XML — αν το API επιστρέψει μη έγκυρο XML (π.χ. error page),
-    # επιστρέφουμε κενό DataFrame αντί να κρασάρουμε
-    try:
-        root = ET.fromstring(response.content)
-    except Exception:
+    if raw is None or (hasattr(raw, 'empty') and raw.empty):
         return pd.DataFrame()
-
-    # Το ENTSO-E API χρησιμοποιεί XML namespaces (π.χ. {urn:iec62325.351...}).
-    # Πρέπει να τα ανιχνεύσουμε αυτόματα για να βρούμε τα σωστά tags.
-    # Παράδειγμα: το root tag είναι {urn:iec62325.351:tc57wg16:451-6:...}GL_MarketDocument
-    ns = root.tag.split("}")[0].lstrip("{") if "}" in root.tag else ""
-    ns_prefix = f"{{{ns}}}" if ns else ""
 
     rows = []
 
-    # Διατρέχουμε όλα τα TimeSeries blocks (ένα ανά τύπο παραγωγής ή ανά κατεύθυνση)
-    for ts in root.findall(f"{ns_prefix}TimeSeries"):
-
-        # PsrType: υπάρχει μόνο στα generation datasets — π.χ. "B16" (Solar)
-        psr_type = None
-        psr_elem = ts.find(f".//{ns_prefix}psrType")
-        if psr_elem is not None:
-            psr_type = psr_elem.text
-
-        # Διαβάζουμε το curveType του TimeSeries (A01 ή A03)
-        # A01 = Fixed blocks: κάθε position υπάρχει πάντα στο XML
-        # A03 = Variable blocks: γράφεται μόνο όταν αλλάζει η τιμή → χρειάζεται forward-fill
-        curve_elem = ts.find(f"{ns_prefix}curveType")
-        curve_type = curve_elem.text if curve_elem is not None else "A01"
-
-        # Κάθε TimeSeries έχει ένα ή περισσότερα Period blocks
-        for period in ts.findall(f"{ns_prefix}Period"):
-
-            # Βρίσκουμε την αρχή της χρονικής περιόδου
-            start_elem = period.find(f"{ns_prefix}timeInterval/{ns_prefix}start")
-            if start_elem is None:
+    # ── ΠΕΡΙΠΤΩΣΗ 1: Series (π.χ. DAM prices, intraday prices) ──
+    if isinstance(raw, pd.Series):
+        for ts, val in raw.items():
+            if pd.isna(val):
                 continue
-            start_utc = datetime.strptime(start_elem.text, "%Y-%m-%dT%H:%MZ")
-            start_utc = start_utc.replace(tzinfo=timezone.utc)
+            ts_utc   = ts.tz_convert("UTC").replace(tzinfo=None)
+            ts_local = ts.tz_convert("Europe/Athens").replace(tzinfo=None)
+            rows.append({
+                "Timestamp (UTC)"   : ts_utc,
+                "Timestamp (Local)" : ts_local,
+                value_col           : float(val),
+                "Country"           : country_name,
+                "Dataset"           : dataset_label,
+            })
 
-            # Resolution: πόση ώρα μεταξύ κάθε Point (π.χ. PT60M, PT15M)
-            res_elem = period.find(f"{ns_prefix}resolution")
-            resolution_min = _parse_resolution(res_elem.text if res_elem is not None else "PT60M")
+    # ── ΠΕΡΙΠΤΩΣΗ 2: DataFrame ──
+    elif isinstance(raw, pd.DataFrame):
 
-            # Υπολογισμός συνολικών positions από το timeInterval
-            # (χρειάζεται για το forward-fill του A03)
-            end_elem = period.find(f"{ns_prefix}timeInterval/{ns_prefix}end")
-            end_utc  = datetime.strptime(end_elem.text, "%Y-%m-%dT%H:%MZ")
-            end_utc  = end_utc.replace(tzinfo=timezone.utc)
-            total_minutes   = int((end_utc - start_utc).total_seconds() / 60)
-            total_positions = total_minutes // resolution_min
+        # MultiIndex columns (π.χ. generation_per_type):
+        # στήλες: (B01, Actual Aggregated), (B16, Actual Aggregated), ...
+        if isinstance(raw.columns, pd.MultiIndex):
+            for ts, row_data in raw.iterrows():
+                ts_utc   = ts.tz_convert("UTC").replace(tzinfo=None)
+                ts_local = ts.tz_convert("Europe/Athens").replace(tzinfo=None)
 
-            # Διαβάζουμε τα Points που υπάρχουν στο XML σε λεξικό {position: τιμή}
-            points_in_xml = {}
-            for point in period.findall(f"{ns_prefix}Point"):
-                pos_elem = point.find(f"{ns_prefix}position")
+                for (psr_type, sub_col), val in row_data.items():
+                    # Κρατάμε μόνο "Actual Aggregated" (όχι "Actual Consumption")
+                    if "Aggregated" not in str(sub_col):
+                        continue
+                    if pd.isna(val):
+                        continue
+                    rows.append({
+                        "Timestamp (UTC)"   : ts_utc,
+                        "Timestamp (Local)" : ts_local,
+                        value_col           : float(val),
+                        "Country"           : country_name,
+                        "Dataset"           : dataset_label,
+                        "PsrType"           : str(psr_type),
+                    })
 
-                # Αναζήτηση τιμής — χρησιμοποιούμε loop αντί για find()
-                # γιατί το ET.find() δεν χειρίζεται αξιόπιστα την τελεία στο "price.amount"
-                val_elem = None
-                for child in point:
-                    local_tag = child.tag.split("}")[-1]
-                    if local_tag in ("price.amount", "quantity"):
-                        val_elem = child
-                        break
+        else:
+            # Απλό DataFrame — παίρνουμε την πρώτη αριθμητική στήλη ως τιμή
+            numeric_cols = raw.select_dtypes(include="number").columns.tolist()
+            if not numeric_cols:
+                return pd.DataFrame()
 
-                if pos_elem is None or val_elem is None:
+            val_col = numeric_cols[0]
+
+            for ts, row_data in raw.iterrows():
+                val = row_data[val_col]
+                if pd.isna(val):
                     continue
-
-                points_in_xml[int(pos_elem.text)] = float(val_elem.text)
-
-            # Διατρέχουμε ΟΛΑ τα positions (1 έως total_positions) με forward-fill:
-            #   - αν το position υπάρχει στο XML → χρησιμοποίησέ το
-            #   - αν ΔΕΝ υπάρχει και curveType=A03 → κράτα την προηγούμενη τιμή (forward-fill)
-            #   - αν ΔΕΝ υπάρχει και curveType=A01 → πραγματικά missing, παράλειψε
-            last_val = None
-            for pos in range(1, total_positions + 1):
-
-                if pos in points_in_xml:
-                    last_val = points_in_xml[pos]
-                elif curve_type == "A03":
-                    pass   # last_val παραμένει η προηγούμενη τιμή
-                else:
-                    last_val = None   # A01: πραγματικά missing
-
-                if last_val is None:
-                    continue
-
-                # Υπολογισμός timestamp: start + (position-1) * resolution
-                offset_minutes = (pos - 1) * resolution_min
-                ts_utc   = start_utc + pd.Timedelta(minutes=offset_minutes)
-
-                # Μετατροπή UTC → τοπική ώρα για εμφάνιση
-                ts_local = ts_utc.astimezone(LOCAL_TZ).replace(tzinfo=None)
-
-                row = {
-                    "Timestamp (UTC)"   : ts_utc.replace(tzinfo=None),
+                ts_utc   = ts.tz_convert("UTC").replace(tzinfo=None)
+                ts_local = ts.tz_convert("Europe/Athens").replace(tzinfo=None)
+                rows.append({
+                    "Timestamp (UTC)"   : ts_utc,
                     "Timestamp (Local)" : ts_local,
-                    value_col           : last_val,
+                    value_col           : float(val),
                     "Country"           : country_name,
-                    "Dataset"           : ds["label"],
-                }
-                if psr_type:
-                    row["PsrType"] = psr_type
-
-                rows.append(row)
+                    "Dataset"           : dataset_label,
+                })
 
     if not rows:
         return pd.DataFrame()
@@ -447,35 +311,27 @@ def parse(response: requests.Response, dataset_key: str,
     return df
 
 
-def _parse_resolution(res_str: str) -> int:
+def _query_single(client: EntsoePandasClient, ds_key: str,
+                  country_code: str, start: pd.Timestamp,
+                  end: pd.Timestamp):
     """
-    Μετατρέπει ISO 8601 duration string σε λεπτά.
-    Παραδείγματα: "PT60M" → 60, "PT15M" → 15, "P1Y" → 525600
+    Καλεί τη σωστή μέθοδο της entsoe-py για το dataset.
+    Επιστρέφει το raw αποτέλεσμα (Series ή DataFrame) ή None αν δεν υπάρχουν δεδομένα.
     """
-    res_str = res_str.strip()
-    if res_str == "PT60M" or res_str == "PT1H":
-        return 60
-    elif res_str == "PT30M":
-        return 30
-    elif res_str == "PT15M":
-        return 15
-    elif res_str == "P1D":
-        return 1440
-    elif res_str == "P7D":
-        return 10080
-    elif res_str == "P1M":
-        return 43200   # προσέγγιση
-    elif res_str == "P1Y":
-        return 525600
-    else:
-        # Γενική περίπτωση: αναζητούμε αριθμό πριν το "M"
-        import re
-        m = re.search(r"(\d+)M", res_str)
-        return int(m.group(1)) if m else 60
+    ds     = CATALOG[ds_key]
+    method = getattr(client, ds["method"])
+    params = ds["extra_params"]
+
+    try:
+        return method(country_code, start=start, end=end, **params)
+    except (NoMatchingDataError, InvalidBusinessParameterError):
+        return None
+    except Exception:
+        return None
 
 
 # ============================================================
-# ΚΥΡΙΑ ΣΥΝΑΡΤΗΣΗ 3: get_data()
+# ΚΥΡΙΑ ΣΥΝΑΡΤΗΣΗ 1: get_data()
 # ============================================================
 
 def get_data(dataset_keys: list, country_names: list,
@@ -484,42 +340,46 @@ def get_data(dataset_keys: list, country_names: list,
     """
     Κύρια συνάρτηση — καλείται από το Streamlit UI.
 
-    Κάνει fetch + parse για κάθε συνδυασμό (dataset × χώρα).
+    Κάνει query για κάθε συνδυασμό (dataset × χώρα) μέσω entsoe-py.
     Επιστρέφει λεξικό: { dataset_key: DataFrame με όλες τις χώρες }
 
-    Η best-effort λογική εφαρμόζεται αυτόματα:
-    αν μια χώρα δεν έχει δεδομένα, απλώς δεν εμφανίζεται στο DataFrame εκείνης.
+    Η entsoe-py χειρίζεται αυτόματα:
+      - Year limiting (σπάει >1 έτος σε chunks)
+      - Rate limiting & retry
+      - XML parsing
     """
-    results = {}   # dataset_key → DataFrame
+    client = EntsoePandasClient(api_key=api_token)
+    start  = _make_timestamps(dt_from)
+    end    = _make_timestamps(dt_to + timedelta(days=1))  # exclusive upper bound
+
+    results = {}
 
     for ds_key in dataset_keys:
-        dfs = []   # μία λίστα DataFrames, ένα ανά χώρα
+        dfs = []
 
         for country in country_names:
-            eic = COUNTRIES.get(country)
-            if not eic:
-                continue   # άγνωστη χώρα — παράλειψη
+            code = COUNTRIES.get(country)
+            if not code:
+                continue
 
-            resp = fetch(ds_key, eic, dt_from, dt_to, api_token)
-            try:
-                df = parse(resp, ds_key, country)
-            except Exception:
-                df = pd.DataFrame()
+            raw = _query_single(client, ds_key, code, start, end)
+            df  = _normalize_to_df(
+                raw,
+                value_col    = CATALOG[ds_key]["value_col"],
+                country_name = country,
+                dataset_label= CATALOG[ds_key]["label"],
+            )
 
             if not df.empty:
                 dfs.append(df)
 
-        # Συνδυάζουμε όλα τα DataFrames της ίδιας κατηγορίας
-        if dfs:
-            results[ds_key] = pd.concat(dfs, ignore_index=True)
-        else:
-            results[ds_key] = pd.DataFrame()   # κενό → best-effort
+        results[ds_key] = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
     return results
 
 
 # ============================================================
-# ΚΥΡΙΑ ΣΥΝΑΡΤΗΣΗ 4: check_availability()
+# ΚΥΡΙΑ ΣΥΝΑΡΤΗΣΗ 2: check_availability()
 # ============================================================
 
 def check_availability(dataset_keys: list, country_names: list,
@@ -527,37 +387,33 @@ def check_availability(dataset_keys: list, country_names: list,
                         api_token: str) -> dict:
     """
     Ελέγχει διαθεσιμότητα δεδομένων για κάθε (dataset, χώρα).
-    Επιστρέφει λεξικό:
-      { (dataset_key, country_name): "ok" | "partial" | "unavailable" }
+    Επιστρέφει: { (dataset_key, country_name): "ok" | "partial" | "unavailable" }
 
-    Χρησιμοποιείται για τον Πίνακα Διαθεσιμότητας στο UI.
-    Κάνει ένα μικρό δοκιμαστικό request (μόνο 1 ημέρα) για ταχύτητα.
+    Κάνει δοκιμαστικό request μόνο για την πρώτη ημέρα (για ταχύτητα).
     """
-    availability = {}
-
-    # Ελέγχουμε μόνο την πρώτη ημέρα για ταχύτητα
-    dt_check_end = dt_from + pd.Timedelta(days=1)
+    client        = EntsoePandasClient(api_key=api_token)
+    start         = _make_timestamps(dt_from)
+    end           = _make_timestamps(dt_from + timedelta(days=2))  # μόνο 1 ημέρα
+    availability  = {}
 
     for ds_key in dataset_keys:
         for country in country_names:
-            eic = COUNTRIES.get(country)
-            if not eic:
+            code = COUNTRIES.get(country)
+            if not code:
                 availability[(ds_key, country)] = "unavailable"
                 continue
 
-            resp = fetch(ds_key, eic, dt_from, dt_check_end, api_token)
+            raw = _query_single(client, ds_key, code, start, end)
+            df  = _normalize_to_df(
+                raw,
+                value_col    = CATALOG[ds_key]["value_col"],
+                country_name = country,
+                dataset_label= CATALOG[ds_key]["label"],
+            )
 
-            if resp.status_code == 200:
-                try:
-                    df = parse(resp, ds_key, country)
-                    if df.empty:
-                        availability[(ds_key, country)] = "partial"
-                    else:
-                        availability[(ds_key, country)] = "ok"
-                except Exception:
-                    # Το API επέστρεψε 200 αλλά με μη έγκυρο XML
-                    availability[(ds_key, country)] = "unavailable"
-            else:
+            if df.empty:
                 availability[(ds_key, country)] = "unavailable"
+            else:
+                availability[(ds_key, country)] = "ok"
 
     return availability
