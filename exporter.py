@@ -3,17 +3,15 @@ exporter.py
 -----------
 Μετατρέπει τα DataFrames σε Excel αρχείο με πολλά sheets.
 
-Λογική sheets (αποφασίστηκε στο UI design):
+Λογική sheets:
   • 1 χώρα,  πολλές κατηγορίες → 1 sheet, στήλες ανά κατηγορία
   • Πολλές χώρες, πολλές κατηγορίες → 1 sheet ανά κατηγορία, στήλες ανά χώρα
   • ΑΔΜΗΕ → 1 sheet ανά filetype (πάντα 1 χώρα: GR)
   • Πάντα υπάρχει sheet "Info" στο τέλος
 
-Κύρια συνάρτηση:
-  export_entso(results, dataset_keys, country_names, dt_from, dt_to) → bytes
-  export_admie(results, filetype_keys, dt_from, dt_to)               → bytes
-
-Και οι δύο επιστρέφουν bytes που το Streamlit κατεβάζει απευθείας.
+Κύριες συναρτήσεις:
+  export_entso(results, dataset_keys, country_names, dt_from, dt_to) -> bytes
+  export_admie(results, filetype_keys, dt_from, dt_to)               -> bytes
 """
 
 import pandas as pd
@@ -29,28 +27,40 @@ from entso_client import CATALOG
 def _safe_sheet_name(name: str, max_len: int = 31) -> str:
     """
     Το Excel επιτρέπει ονόματα sheets μέχρι 31 χαρακτήρες,
-    χωρίς τους χαρακτήρες: / \ ? * [ ]
+    χωρίς τους χαρακτήρες: / ? * [ ] : '
+    Επίσης δεν επιτρέπεται το ' στην αρχή ή στο τέλος.
     """
-    for ch in r"/\?*[]":
+    # Χαρακτήρες που απαγορεύει το Excel σε ονόματα sheet
+    for ch in "/\\?*[]:":
         name = name.replace(ch, "-")
+    # Αφαιρούμε single quote από αρχή/τέλος (απαγορεύεται από Excel)
+    name = name.strip("'")
+    # Αν το όνομα έμεινε κενό, δίνουμε default
+    if not name:
+        name = "Sheet"
     return name[:max_len]
 
 
-def _make_info_sheet(source: str, dt_from: datetime, dt_to: datetime,
+def _make_info_sheet(source: str, dt_from, dt_to,
                      items: list, extra: dict = None) -> pd.DataFrame:
     """
-    Φτιάχνει το περιεχόμενο του sheet "Info".
-    Επιστρέφει DataFrame με 2 στήλες: Παράμετρος | Τιμή
+    Φτιάχνει το περιεχόμενο του sheet 'Info'.
+    Επιστρέφει DataFrame με 2 στήλες: Παράμετρος | Τιμή.
+    Δέχεται dt_from/dt_to είτε ως datetime είτε ως string (ΑΔΜΗΕ).
     """
+    def _fmt(dt):
+        if isinstance(dt, datetime):
+            return dt.strftime("%d/%m/%Y %H:%M")
+        return str(dt)
+
     rows = [
-        ("Πηγή δεδομένων",  source),
-        ("Από",             dt_from.strftime("%d/%m/%Y %H:%M") if isinstance(dt_from, datetime) else str(dt_from)),
-        ("Έως",             dt_to.strftime("%d/%m/%Y %H:%M")   if isinstance(dt_to,   datetime) else str(dt_to)),
-        ("Δεδομένα",        ", ".join(items)),
-        ("Εξαγωγή",         datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
+        ("Πηγή δεδομένων", source),
+        ("Από",            _fmt(dt_from)),
+        ("Έως",            _fmt(dt_to)),
+        ("Δεδομένα",       ", ".join(items)),
+        ("Εξαγωγή",        datetime.now().strftime("%d/%m/%Y %H:%M:%S")),
     ]
 
-    # Προαιρετικά επιπλέον πεδία (π.χ. χώρες)
     if extra:
         for key, val in extra.items():
             rows.append((key, str(val)))
@@ -58,38 +68,71 @@ def _make_info_sheet(source: str, dt_from: datetime, dt_to: datetime,
     return pd.DataFrame(rows, columns=["Παράμετρος", "Τιμή"])
 
 
-def _pivot_for_sheet(df: pd.DataFrame, value_col: str, country_col: str = "Country") -> pd.DataFrame:
+def _pivot_for_sheet(df: pd.DataFrame, value_col: str,
+                     country_col: str = "Country") -> pd.DataFrame:
     """
-    Μετατρέπει ένα "μακρύ" DataFrame (long format) σε "φαρδύ" (wide format).
+    Μετατρέπει long-format DataFrame σε wide-format για το Excel.
 
-    Long format:
-      Timestamp | Country | Value
-      2024-01-01 | GR     | 5200
-      2024-01-01 | DE     | 45000
+    Long:  Timestamp | Country | Value
+    Wide:  Timestamp | Greece  | Germany | ...
 
-    Wide format (αυτό που βλέπει ο χρήστης στο Excel):
-      Timestamp | GR    | DE
-      2024-01-01 | 5200 | 45000
-
-    Γιατί χρειάζεται: είναι πολύ πιο εύκολο να διαβάσεις στο Excel.
+    Για datasets με PsrType (π.χ. generation_per_type), προσθέτει
+    στήλες ανά συνδυασμό Country+PsrType αντί να χάνει δεδομένα.
     """
     if df.empty or country_col not in df.columns or "Timestamp (UTC)" not in df.columns:
         return df
 
     try:
+        has_psr = "PsrType" in df.columns and df["PsrType"].notna().any()
+
+        if has_psr:
+            # Συνδυάζουμε Country + PsrType σε μία στήλη για τον άξονα στηλών
+            # ώστε να μην χαθεί καμία τιμή
+            df = df.copy()
+            df["_col"] = df[country_col] + " | " + df["PsrType"].fillna("")
+            col_axis = "_col"
+        else:
+            col_axis = country_col
+
         pivot = df.pivot_table(
-            index="Timestamp (UTC)",  # γραμμές = χρόνος UTC (κοινό για όλες τις χώρες)
-            columns=country_col,      # στήλες = χώρες
-            values=value_col,         # τιμές
-            aggfunc="first"           # αν υπάρχουν διπλότυπα, παίρνουμε την πρώτη
+            index="Timestamp (UTC)",
+            columns=col_axis,
+            values=value_col,
+            aggfunc="sum",    # sum αντί για first: σωστό για MW quantities
         ).reset_index()
 
-        pivot.columns.name = None     # αφαιρούμε το όνομα "Country" από τον άξονα στηλών
+        pivot.columns.name = None
         return pivot
 
     except Exception:
-        # Αν το pivot αποτύχει, επιστρέφουμε το original df
         return df
+
+
+def _pivot_local_timestamps(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Φτιάχνει στήλες τοπικής ώρας ανά χώρα.
+
+    Αποτέλεσμα:
+      Timestamp (UTC) | Local (Greece) | Local (Germany) | ...
+    """
+    if df.empty or "Country" not in df.columns or "Timestamp (Local)" not in df.columns:
+        return pd.DataFrame()
+
+    countries = sorted(df["Country"].unique())
+    result = None
+
+    for country in countries:
+        sub = (df[df["Country"] == country]
+               [["Timestamp (UTC)", "Timestamp (Local)"]]
+               .drop_duplicates("Timestamp (UTC)")
+               .rename(columns={"Timestamp (Local)": f"Local ({country})"}))
+
+        if result is None:
+            result = sub
+        else:
+            result = pd.merge(result, sub, on="Timestamp (UTC)", how="outer")
+
+    return result if result is not None else pd.DataFrame()
 
 
 # ============================================================
@@ -109,30 +152,25 @@ def export_entso(results: dict, dataset_keys: list, country_names: list,
 
     Επιστρέφει: bytes (περιεχόμενο .xlsx αρχείου)
     """
-
-    # Γράφουμε σε buffer μνήμης — δεν αποθηκεύουμε στο δίσκο
     buffer = io.BytesIO()
 
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
 
-        # ── ΛΟΓΙΚΗ SHEETS ──────────────────────────────────────
         if len(country_names) <= 1:
-            # ΣΕΝΑΡΙΟ Α: 1 χώρα, πολλές κατηγορίες
-            # → 1 sheet με στήλες ανά κατηγορία
+            # ΣΕΝΑΡΙΟ Α: 1 χώρα → 1 sheet με στήλες ανά κατηγορία
             _write_single_country_sheet(writer, results, dataset_keys, country_names)
         else:
-            # ΣΕΝΑΡΙΟ Β: πολλές χώρες, πολλές κατηγορίες
-            # → 1 sheet ανά κατηγορία, στήλες ανά χώρα
+            # ΣΕΝΑΡΙΟ Β: πολλές χώρες → 1 sheet ανά κατηγορία
             _write_multi_country_sheets(writer, results, dataset_keys)
 
-        # ── SHEET INFO ─────────────────────────────────────────
+        # Sheet Info — πάντα στο τέλος
         labels = [CATALOG[k]["label"] for k in dataset_keys if k in CATALOG]
         info_df = _make_info_sheet(
-            source   = "ENTSO-E Transparency Platform",
-            dt_from  = dt_from,
-            dt_to    = dt_to,
-            items    = labels,
-            extra    = {"Χώρες": ", ".join(country_names)},
+            source  = "ENTSO-E Transparency Platform",
+            dt_from = dt_from,
+            dt_to   = dt_to,
+            items   = labels,
+            extra   = {"Χώρες": ", ".join(country_names)},
         )
         info_df.to_excel(writer, sheet_name="Info", index=False)
 
@@ -141,12 +179,18 @@ def export_entso(results: dict, dataset_keys: list, country_names: list,
 
 
 def _write_single_country_sheet(writer, results: dict, dataset_keys: list,
-                                  country_names: list):
+                                 country_names: list):
     """
-    Σενάριο Α: Γράφει 1 sheet με timestamp + μία στήλη ανά κατηγορία.
+    Σενάριο Α: 1 χώρα, πολλές κατηγορίες.
+    Γράφει 1 sheet: Timestamp (UTC) | Timestamp (Local) | κατηγορία1 | κατηγορία2 | ...
+
+    Για datasets με PsrType (π.χ. generation_per_type) που έχουν
+    πολλαπλές γραμμές ανά timestamp, γράφουμε ΧΩΡΙΣΤΟ sheet
+    αντί να μπερδέψουμε το merge.
     """
-    # Μαζεύουμε όλα τα DataFrames και τα ενώνουμε στο Timestamp
-    combined = None
+    country = country_names[0] if country_names else "Data"
+    combined = None       # το κύριο sheet (datasets χωρίς PsrType)
+    psr_datasets = []     # datasets με PsrType → χωριστά sheets
 
     for ds_key in dataset_keys:
         df = results.get(ds_key, pd.DataFrame())
@@ -156,52 +200,57 @@ def _write_single_country_sheet(writer, results: dict, dataset_keys: list,
         label     = CATALOG[ds_key]["label"]
         value_col = CATALOG[ds_key]["value_col"]
 
-        # Κρατάμε UTC, Local και value_col, μετονομάζουμε value_col → label
-        sub = df[["Timestamp (UTC)", "Timestamp (Local)", value_col]].copy()
-        sub = sub.rename(columns={value_col: label})
+        has_psr = "PsrType" in df.columns and df["PsrType"].notna().any()
+
+        if has_psr:
+            # Γράφουμε χωριστό sheet για αυτό το dataset
+            psr_datasets.append((ds_key, label, value_col, df))
+            continue
+
+        # Απλό dataset: κρατάμε μόνο τις στήλες που χρειαζόμαστε
+        sub = (df[["Timestamp (UTC)", "Timestamp (Local)", value_col]]
+               .drop_duplicates("Timestamp (UTC)")
+               .rename(columns={value_col: label}))
 
         if combined is None:
             combined = sub
         else:
-            # Ενώνουμε βάσει UTC (κοινό σημείο αναφοράς) — outer join = best effort
-            combined = pd.merge(combined, sub, on=["Timestamp (UTC)", "Timestamp (Local)"], how="outer")
+            combined = pd.merge(
+                combined, sub,
+                on=["Timestamp (UTC)", "Timestamp (Local)"],
+                how="outer",
+            )
 
+    # Γράφουμε το κύριο sheet
     if combined is not None and not combined.empty:
         combined.sort_values("Timestamp (UTC)", inplace=True)
-        country = country_names[0] if country_names else "Data"
-        sheet_name = _safe_sheet_name(country)
-        combined.to_excel(writer, sheet_name=sheet_name, index=False)
+        combined.to_excel(writer, sheet_name=_safe_sheet_name(country), index=False)
 
+    # Γράφουμε χωριστά sheets για PsrType datasets
+    for ds_key, label, value_col, df in psr_datasets:
+        # Pivot: Timestamp (UTC) | B01 | B16 | ...
+        pivot = df.pivot_table(
+            index="Timestamp (UTC)",
+            columns="PsrType",
+            values=value_col,
+            aggfunc="sum",
+        ).reset_index()
+        pivot.columns.name = None
 
-def _pivot_local_timestamps(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Φτιάχνει στήλες τοπικής ώρας ανά χώρα.
+        # Προσθέτουμε τοπική ώρα
+        local_col = (df[["Timestamp (UTC)", "Timestamp (Local)"]]
+                     .drop_duplicates("Timestamp (UTC)"))
+        pivot = pd.merge(local_col, pivot, on="Timestamp (UTC)", how="right")
+        pivot.sort_values("Timestamp (UTC)", inplace=True)
 
-    Αποτέλεσμα:
-      Timestamp (UTC) | Local (Greece) | Local (Germany) | ...
-    """
-    if df.empty or "Country" not in df.columns:
-        return pd.DataFrame()
-
-    countries = df["Country"].unique()
-    result = None
-
-    for country in sorted(countries):
-        sub = df[df["Country"] == country][["Timestamp (UTC)", "Timestamp (Local)"]].drop_duplicates()
-        sub = sub.rename(columns={"Timestamp (Local)": f"Local ({country})"})
-
-        if result is None:
-            result = sub
-        else:
-            result = pd.merge(result, sub, on="Timestamp (UTC)", how="outer")
-
-    return result if result is not None else pd.DataFrame()
+        sheet_name = _safe_sheet_name(f"{country} - {label}")
+        pivot.to_excel(writer, sheet_name=sheet_name, index=False)
 
 
 def _write_multi_country_sheets(writer, results: dict, dataset_keys: list):
     """
-    Σενάριο Β: Γράφει 1 sheet ανά κατηγορία.
-    Δομή: Timestamp (UTC) | Local (χώρα1) | Local (χώρα2) | ... | τιμή χώρα1 | τιμή χώρα2 | ...
+    Σενάριο Β: πολλές χώρες, 1 sheet ανά κατηγορία.
+    Δομή: Timestamp (UTC) | Local (χώρα1) | Local (χώρα2) | ... | τιμή_χώρα1 | τιμή_χώρα2 | ...
     """
     for ds_key in dataset_keys:
         df = results.get(ds_key, pd.DataFrame())
@@ -211,20 +260,19 @@ def _write_multi_country_sheets(writer, results: dict, dataset_keys: list):
         label     = CATALOG[ds_key]["label"]
         value_col = CATALOG[ds_key]["value_col"]
 
-        # Pivot τιμών: Timestamp UTC (γραμμές) × Country (στήλες)
+        # Pivot τιμών
         value_pivot = _pivot_for_sheet(df, value_col, country_col="Country")
 
-        # Pivot τοπικής ώρας: μία στήλη ανά χώρα
+        # Pivot τοπικής ώρας (μία στήλη ανά χώρα)
         local_pivot = _pivot_local_timestamps(df)
 
-        # Ενώνουμε: UTC | τοπικές ώρες | τιμές
         if local_pivot is not None and not local_pivot.empty:
             wide_df = pd.merge(local_pivot, value_pivot, on="Timestamp (UTC)", how="outer")
         else:
             wide_df = value_pivot
 
-        sheet_name = _safe_sheet_name(label)
-        wide_df.to_excel(writer, sheet_name=sheet_name, index=False)
+        wide_df.sort_values("Timestamp (UTC)", inplace=True)
+        wide_df.to_excel(writer, sheet_name=_safe_sheet_name(label), index=False)
 
 
 # ============================================================
@@ -236,7 +284,7 @@ def export_admie(results: dict, filetype_keys: list,
     """
     Δημιουργεί Excel αρχείο από τα αποτελέσματα του admie_client.get_data().
 
-    Για το ΑΔΜΗΕ: πάντα 1 χώρα (GR), οπότε 1 sheet ανά filetype.
+    Για το ΑΔΜΗΕ: πάντα 1 χώρα (GR) → 1 sheet ανά filetype.
 
     Παράμετροι:
       results      : { filetype: DataFrame } από admie_client.get_data()
@@ -249,22 +297,21 @@ def export_admie(results: dict, filetype_keys: list,
 
         for filetype in filetype_keys:
             df = results.get(filetype, pd.DataFrame())
+            sheet_name = _safe_sheet_name(filetype)
 
             if df.empty:
-                # Γράφουμε κενό sheet ώστε ο χρήστης να ξέρει ότι ζητήθηκε
-                # αλλά δεν υπήρχαν δεδομένα
+                # Κενό sheet ώστε ο χρήστης να ξέρει ότι ζητήθηκε
                 empty = pd.DataFrame({"Σημείωση": ["Δεν βρέθηκαν δεδομένα για αυτό το filetype."]})
-                empty.to_excel(writer, sheet_name=_safe_sheet_name(filetype), index=False)
+                empty.to_excel(writer, sheet_name=sheet_name, index=False)
                 continue
 
             # Αφαιρούμε τεχνικές στήλες που δεν χρειάζεται να βλέπει ο χρήστης
             cols_to_drop = [c for c in ["source_file"] if c in df.columns]
             df = df.drop(columns=cols_to_drop)
 
-            sheet_name = _safe_sheet_name(filetype)
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-        # ── SHEET INFO ─────────────────────────────────────────
+        # Sheet Info — πάντα στο τέλος
         info_df = _make_info_sheet(
             source  = "ΑΔΜΗΕ File API",
             dt_from = dt_from,

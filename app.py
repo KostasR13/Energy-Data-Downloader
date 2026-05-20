@@ -82,7 +82,7 @@ st.divider()
 # 3. TABS
 # ============================================================
 
-tab_entso, tab_admie, tab_about = st.tabs([" ENTSO-E", " ΑΔΜΗΕ", "ℹ️  About"])
+tab_entso, tab_admie, tab_about = st.tabs(["🌍  ENTSO-E", "🇬🇷  ΑΔΜΗΕ", "ℹ️  About"])
 
 
 # ════════════════════════════════════════════════════════════
